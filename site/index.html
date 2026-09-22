@@ -1,0 +1,266 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Sparky</title>
+  <meta name="description" content="Sparky is a meeting copilot for the conversations you are in. It transcribes the room or the call live and, on one keypress, drafts what you would say next in the first person: an answer if you were just asked something, talking points otherwise. Terminal app and Chrome side panel.">
+  <meta name="theme-color" content="#FFC61A">
+  <meta property="og:title" content="Sparky, a meeting copilot">
+  <meta property="og:description" content="Live transcript of the conversation you are in, and on one keypress a first-person draft of what to say next, grounded in your own context. Terminal app and Chrome side panel.">
+  <meta property="og:image" content="https://danieltyukov.github.io/meeting-copilot/assets/logo.png">
+  <meta property="og:url" content="https://danieltyukov.github.io/meeting-copilot/">
+  <link rel="canonical" href="https://danieltyukov.github.io/meeting-copilot/">
+  <link rel="icon" href="assets/icon.svg" type="image/svg+xml">
+  <link rel="icon" href="assets/icon48.png" type="image/png" sizes="48x48">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@62..125,400..700&family=JetBrains+Mono:wght@400;600&display=swap">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <a class="skip" href="#main">Skip to content</a>
+
+  <header class="top">
+    <div class="wrap top-inner">
+      <a class="brand" href="#main" aria-label="Sparky, home">
+        <img src="assets/budgie-ink.svg" width="28" height="28" alt="">
+        <span>Sparky</span>
+      </a>
+      <nav aria-label="Site">
+        <a href="#decides">How it decides</a>
+        <a href="#terminal">Terminal</a>
+        <a href="#extension">Extension</a>
+        <a href="https://github.com/danieltyukov/meeting-copilot">GitHub</a>
+      </nav>
+    </div>
+  </header>
+
+  <main id="main">
+    <section class="hero" aria-labelledby="headline">
+      <div class="wrap hero-grid">
+        <div class="hero-copy">
+          <h1 id="headline">Press <kbd>h</kbd>. Say the next thing.</h1>
+          <p class="lede">
+            Sparky listens to the conversation you are in and, on one keypress, drafts what
+            you would say next in your own words. An answer if you were just asked something.
+            Talking points to keep things moving otherwise. Grounded in your repo, or in
+            whatever you pasted, and read aloud by you.
+          </p>
+          <p class="actions">
+            <a class="btn btn-primary" href="#terminal">Get the terminal app</a>
+            <a class="btn" href="#extension">Get the Chrome extension</a>
+          </p>
+          <p class="fine">
+            Linux terminal, or a side panel beside your Google Meet or Microsoft Teams call.
+            Open source, MIT. A visible aid, built to be used with consent.
+          </p>
+        </div>
+
+        <!--
+          The one moving thing on the page: the product, doing its job. Three
+          transcript lines arrive the way Deepgram delivers them, then the
+          draft box fills in. With reduced motion the final frame is shown.
+        -->
+        <figure class="demo" aria-label="A recorded example of Sparky drafting an answer during a design review">
+          <div class="term" id="demo">
+            <div class="term-bar"><span></span><span></span><span></span><b>meeting-copilot</b></div>
+            <div class="term-head"><i class="rec">REC</i> 01:35 <span class="dim">stt deepgram:nova-3 &nbsp; llm sonnet·api &nbsp; me=Speaker A</span></div>
+            <div class="term-box term-transcript">
+              <div class="term-title">Live transcript</div>
+              <p class="line" data-step="1"><span class="ts">[00:08]</span> <span class="spk-b">Speaker B:</span> Walk me through your gain stage. Why this topology?</p>
+              <p class="line" data-step="2"><span class="ts">[00:21]</span> <span class="spk-me">Me:</span> We went with a telescopic cascode, mainly for the output impedance.</p>
+              <p class="line" data-step="3"><span class="ts">[00:34]</span> <span class="spk-b">Speaker B:</span> And how does that choice affect your phase margin?</p>
+              <p class="line partial" data-step="4"><span class="spk-me">Me:</span> <span class="caret">▌</span></p>
+            </div>
+            <div class="term-box term-help" data-step="5">
+              <div class="term-title">Help: read this aloud</div>
+              <p class="q">Q: And how does that choice affect your phase margin?</p>
+              <p class="draft">The dominant pole sits at the cascode output, so the margin is set by the load. At the nominal 2 pF we have about 65 degrees, and the bias network tracks the supply, which is what keeps it there across corners.</p>
+            </div>
+            <div class="term-keys"><b>s</b> start &nbsp; <b>e</b> end+save &nbsp; <b>h</b> help! &nbsp; <b>c</b> add context &nbsp; <b>m</b> mark me &nbsp; <b>q</b> quit</div>
+          </div>
+          <figcaption>Pressed <kbd>h</kbd> after the second question. The draft is in the first person because you are the one saying it.</figcaption>
+        </figure>
+      </div>
+    </section>
+
+    <section class="section" id="decides" aria-labelledby="decides-h">
+      <div class="wrap">
+        <h2 id="decides-h">One key. The transcript decides what it drafts.</h2>
+        <p class="intro">
+          There is no mode to pick mid-sentence. Sparky looks at what has been said since you last
+          spoke and drafts the useful thing.
+        </p>
+        <div class="two">
+          <article class="case">
+            <h3>You were just asked something</h3>
+            <p>
+              You get an answer: spoken length, first person, specific to your project. A lead-in
+              and its question are read together, and a "Right, yes." after your reply is not
+              mistaken for a new question.
+            </p>
+            <div class="term small">
+              <p class="q">Q: How do you handle schema migrations in production?</p>
+              <p class="draft">Expand and contract. The new column goes in first, a backfill job fills it while the old path keeps serving, and only then does the read path switch. The rollback is the same steps in reverse, and it is rehearsed in CI on a copy of last night's data.</p>
+            </div>
+          </article>
+          <article class="case">
+            <h3>Nothing to answer</h3>
+            <p>
+              You just spoke, they only acknowledged, or nobody has said anything yet. You get
+              three to five talking points that pick up from the last thing said: something from
+              your context they have not heard, and at least one question to ask back. Before
+              anyone speaks, they are openers.
+            </p>
+            <div class="term small">
+              <p class="q">From: Right, yes.</p>
+              <p class="draft">- The part of that I am most pleased with is the rehearsal in CI; it caught a lock we would have hit on the real table.
+- One thing we have not covered is what happens to writes during the switch, which I can walk through.
+- How do you handle the same problem on your side today?</p>
+            </div>
+          </article>
+        </div>
+        <p class="note">
+          The note field steers either kind ("keep it to two sentences", "bring up the migration").
+          The whole transcript and your context go with every request, so a draft never
+          contradicts what you already said.
+        </p>
+      </div>
+    </section>
+
+    <section class="band dark" aria-labelledby="runs-h">
+      <div class="wrap">
+        <h2 id="runs-h">How it runs</h2>
+        <pre class="flow" aria-label="The pipeline">mic or call audio ──► Deepgram streaming ──────► live transcript, per voice
+                    └ no key, or Wi-Fi drops: local Whisper, on your machine
+
+your context + transcript ──► Claude API ──────► a first-person draft
+                              ├ no key, or it fails: the claude CLI you are signed in to
+                              └ offline: a local model through Ollama</pre>
+        <dl class="facts">
+          <div><dt>Nothing blocks the audio.</dt><dd>Capture only forwards bytes. Transcription and drafting run on their own threads, so the transcript never stalls while a draft streams.</dd></div>
+          <div><dt>It falls back mid-meeting.</dt><dd>A dropped connection switches transcription to local Whisper and drafts to a local model within seconds. The header says which backend is live.</dd></div>
+          <div><dt>Keys are optional.</dt><dd>With none, the terminal app runs entirely on your machine: Whisper for the room, the claude CLI or Ollama for the words. Keys make it faster.</dd></div>
+        </dl>
+      </div>
+    </section>
+
+    <section class="section" id="terminal" aria-labelledby="terminal-h">
+      <div class="wrap split">
+        <div>
+          <h2 id="terminal-h">In the terminal, inside your project</h2>
+          <p>
+            Launch it in a repository and it reads the README, the manifests, the file tree, recent
+            commits, and any <code>NOTES.md</code> or <code>CONTEXT.md</code> you wrote for the
+            occasion. That is the context every draft draws on, so the words are about your code,
+            not code in general.
+          </p>
+          <pre class="code"><code>git clone https://github.com/danieltyukov/meeting-copilot.git
+cd meeting-copilot &amp;&amp; ./install.sh
+
+cd ~/your/project
+meeting-copilot</code></pre>
+          <p>
+            Needs <code>ffmpeg</code>, Python 3.10 or newer, and the <code>claude</code> CLI signed
+            in. Optional keys go in <code>~/.config/meeting-copilot/config.env</code>.
+            <code>meeting-copilot --self-test</code> checks the install, offline path included.
+          </p>
+          <table class="keys">
+            <caption class="visually-hidden">Keys in the terminal app</caption>
+            <tr><th scope="row"><kbd>s</kbd> <kbd>e</kbd></th><td>start, and end and save the meeting as Markdown</td></tr>
+            <tr><th scope="row"><kbd>h</kbd></th><td>draft what to say next</td></tr>
+            <tr><th scope="row"><kbd>c</kbd></th><td>type a steer for the next draft</td></tr>
+            <tr><th scope="row"><kbd>m</kbd></th><td>mark which detected voice is you</td></tr>
+            <tr><th scope="row"><kbd>1</kbd> <kbd>2</kbd> <kbd>3</kbd></th><td>haiku, sonnet or opus for the drafts</td></tr>
+          </table>
+        </div>
+        <figure class="shot">
+          <img src="assets/screenshot-points.png" width="820" height="712" alt="The terminal app mid-meeting: a live transcript with two voices, and above it the help box holding four first-person talking points drafted from the last question.">
+        </figure>
+      </div>
+    </section>
+
+    <section class="section alt" id="extension" aria-labelledby="extension-h">
+      <div class="wrap split">
+        <figure class="shot panel">
+          <img src="assets/extension.png" width="380" height="595" alt="The Chrome side panel: a recording indicator, the draft box at the top, the live transcript labelled per voice, and Start, Stop and Help buttons.">
+        </figure>
+        <div>
+          <h2 id="extension-h">In a side panel, next to the call</h2>
+          <p>
+            The same copilot for Google Meet and Microsoft Teams. Your microphone and the call
+            tab are captured separately, so your own voice is labelled exactly, and the far end is
+            split into Speaker 1, 2, 3 by diarization. Every call is saved as it happens, so
+            closing the panel loses nothing.
+          </p>
+          <ol class="steps">
+            <li>Open <code>chrome://extensions</code>, turn on Developer mode, and load the <code>extension/</code> folder unpacked.</li>
+            <li>Paste a Deepgram key and an Anthropic key in Settings, and your context (a CV, the agenda, the job description) in the box above it.</li>
+            <li>Open the call, press Start, and accept the two prompts: access to capture the call tab, and the microphone.</li>
+            <li>Press Help, or <kbd>h</kbd>, whenever you need something to say.</li>
+          </ol>
+          <p class="actions">
+            <a class="btn btn-primary" href="https://github.com/danieltyukov/meeting-copilot/tree/main/extension">Extension setup and troubleshooting</a>
+          </p>
+          <p class="fine">
+            Cloud only by nature: a browser cannot run Whisper or a local model the way the
+            desktop app does. Keys stay in the extension's own local storage.
+          </p>
+        </div>
+      </div>
+    </section>
+
+    <section class="band yellow" aria-labelledby="visible-h">
+      <div class="wrap">
+        <h2 id="visible-h">Visible by design</h2>
+        <div class="two">
+          <p>
+            Sparky lives in the normal side panel or in your terminal. It is not hidden from screen
+            sharing, and there is no stealth mode; nothing that hides it will be merged. Use it
+            where you have consent to transcribe the conversation, and disclose it where that is
+            required. It is a confidence aid and a preparation tool, not a way to pretend.
+          </p>
+          <p>
+            Audio goes to Deepgram when a key is set, and nowhere otherwise. Prompts, meaning your
+            context and the transcript, go to the Anthropic API or through the claude CLI, only
+            when you press the key. Nothing goes to the author, and there is no server. The full
+            list is in <a href="https://github.com/danieltyukov/meeting-copilot/blob/main/PRIVACY.md">PRIVACY.md</a>,
+            and how to report a problem in <a href="https://github.com/danieltyukov/meeting-copilot/blob/main/SECURITY.md">SECURITY.md</a>.
+          </p>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <footer class="foot">
+    <div class="wrap foot-inner">
+      <p><img src="assets/budgie-ink.svg" width="22" height="22" alt="" class="foot-mark"> Sparky, a meeting copilot. MIT licence.</p>
+      <nav aria-label="Project">
+        <a href="https://github.com/danieltyukov/meeting-copilot">Source</a>
+        <a href="https://github.com/danieltyukov/meeting-copilot/blob/main/CHANGELOG.md">Changelog</a>
+        <a href="https://github.com/danieltyukov/meeting-copilot/blob/main/CONTRIBUTING.md">Contributing</a>
+        <a href="https://github.com/danieltyukov/meeting-copilot/issues">Issues</a>
+      </nav>
+    </div>
+  </footer>
+
+  <script>
+    // The hero demo. Lines appear at the pace a transcript arrives, then the
+    // draft box fills in. Reduced motion, or no JavaScript, shows the final frame.
+    (function () {
+      var demo = document.getElementById("demo");
+      if (!demo) return;
+      var reduce = window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+      if (reduce) { demo.classList.add("done"); return; }
+      demo.classList.add("play");
+      var steps = demo.querySelectorAll("[data-step]");
+      var delays = [400, 1900, 3200, 4400, 5400];
+      steps.forEach(function (el, i) {
+        setTimeout(function () { el.classList.add("in"); }, delays[i] || 0);
+      });
+      setTimeout(function () { demo.classList.add("done"); }, 7200);
+    })();
+  </script>
+</body>
+</html>
