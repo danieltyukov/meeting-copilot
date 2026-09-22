@@ -32,6 +32,9 @@ jobs:
           python-version: ${{ matrix.python }}
           cache: pip
 
+      # test_audio decodes a real WAV through ffmpeg, the way the app does.
+      - run: sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg
+
       # The full dependency set, including faster-whisper and scikit-learn: the
       # tests never load a model, but the modules that would are imported.
       - run: python -m pip install --upgrade pip
