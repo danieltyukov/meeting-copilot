@@ -24,7 +24,9 @@ header { padding: 8px 10px; border-bottom: 1px solid var(--border); }
 main { flex: 1; overflow: auto; padding: 10px; display: flex; flex-direction: column; gap: 10px; }
 .pane { border: 1px solid var(--border); border-radius: 10px; background: var(--panel); padding: 8px 10px; }
 .pane.answer { border-color: var(--brand); }
-.pane-title { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .04em; margin-bottom: 6px; }
+.pane-title { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .04em; margin-bottom: 6px;
+  display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.pane-title .chip { text-transform: none; letter-spacing: 0; font-size: 11px; padding: 1px 7px; }
 .transcript { max-height: 34vh; overflow: auto; }
 .transcript .line { margin: 2px 0; }
 .spk-Me { color: var(--teal); font-weight: 600; }

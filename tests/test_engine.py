@@ -82,7 +82,7 @@ def test_request_help_uses_assistant(tmp_path, monkeypatch):
     eng.session.add_utterance(1.0, "B", "What did you build?")
 
     monkeypatch.setattr(eng.assistant, "answer",
-                        lambda ctx, tr, q, note="", on_delta=None: f"I built it. ({q}) [{note}]")
+                        lambda ctx, tr, q, note="", on_delta=None, mode="answer": f"I built it. ({q}) [{note}]")
     eng.request_help(note="focus on the data layer")
     eng.end_meeting()
 
@@ -149,10 +149,21 @@ def test_export_falls_back_when_launch_dir_missing(tmp_path, monkeypatch):
     assert any(e["type"] == "exported" for e in events)
 
 
-def test_request_help_without_question(tmp_path):
+def test_request_help_with_nothing_said_drafts_openers(tmp_path, monkeypatch):
     eng, events = _engine(tmp_path)
     eng.start_meeting()
-    eng.request_help()
+    monkeypatch.setattr(eng.assistant, "answer",
+                        lambda c, t, q, note="", on_delta=None, mode="answer": f"{mode}|{q!r}")
+    eng.request_help()                       # auto: nothing to answer, so openers
+    eng.end_meeting()
+    helps = [e for e in events if e["type"] == "help"]
+    assert helps and helps[0]["mode"] == "points" and helps[0]["answer"] == "points|''"
+
+
+def test_forced_answer_without_question_says_so(tmp_path):
+    eng, events = _engine(tmp_path)
+    eng.start_meeting()
+    eng.request_help(mode="answer")          # nothing to answer: no backend is called
     eng.end_meeting()
     assert any(e["type"] == "info" for e in events)
     assert not any(e["type"] == "help" for e in events)
@@ -193,8 +204,74 @@ def test_help_reports_served_backend(tmp_path, monkeypatch):
     eng.start_meeting()
     eng.session.add_utterance(1.0, "B", "Q?")
     monkeypatch.setattr(eng.assistant, "answer",
-                        lambda c, t, q, note="", on_delta=None: "An answer.")
+                        lambda c, t, q, note="", on_delta=None, mode="answer": "An answer.")
     eng.request_help()
     eng.end_meeting()
     helps = [e for e in events if e["type"] == "help"]
     assert helps and helps[0]["served"] == "cli"
+
+
+# -- talking points -----------------------------------------------------------
+def test_request_points_works_without_any_question(tmp_path, monkeypatch):
+    eng, events = _engine(tmp_path)
+    eng.context = "PROJECT CONTEXT"
+    eng.start_meeting()                              # nobody has spoken yet
+    seen = {}
+
+    def fake(ctx, tr, q, note="", on_delta=None, mode="answer"):
+        seen.update(q=q, mode=mode)
+        return "- I could open with the v2 launch."
+
+    monkeypatch.setattr(eng.assistant, "answer", fake)
+    eng.request_help(mode="points")
+    eng.end_meeting()
+    assert seen["mode"] == "points" and seen["q"] == ""
+    helps = [e for e in events if e["type"] == "help"]
+    assert helps and helps[0]["mode"] == "points"
+    started = [e for e in events if e["type"] == "help_started"]
+    assert started and started[0]["mode"] == "points"
+    assert eng.session.assists[0].kind == "points"
+
+
+def test_request_points_anchors_on_the_last_line(tmp_path, monkeypatch):
+    eng, events = _engine(tmp_path)
+    eng.start_meeting()
+    eng.session.add_utterance(1.0, "B", "Why Rust?")
+    eng.session.add_utterance(2.0, "A", "Because of the borrow checker.")
+    seen = {}
+    monkeypatch.setattr(eng.assistant, "answer",
+                        lambda c, t, q, note="", on_delta=None, mode="answer": seen.update(q=q) or "x")
+    eng.request_help(mode="points")
+    eng.end_meeting()
+    assert seen["q"] == "Because of the borrow checker."
+
+
+def test_request_help_decides_the_mode_from_the_transcript(tmp_path, monkeypatch):
+    eng, events = _engine(tmp_path)
+    eng.start_meeting()
+    eng.session.set_me("A")
+    monkeypatch.setattr(eng.assistant, "answer",
+                        lambda c, t, q, note="", on_delta=None, mode="answer": f"{mode}|{q}")
+    eng.session.add_utterance(1.0, "B", "Why Rust?")
+    eng.request_help()                                   # a question is pending: answer it
+    eng.session.add_utterance(2.0, "A", "Because of the borrow checker.")
+    eng.request_help()                                   # I just spoke: keep going
+    eng.end_meeting()
+    helps = [e for e in events if e["type"] == "help"]
+    assert [h["mode"] for h in helps] == ["answer", "points"]
+    assert helps[0]["answer"] == "answer|Why Rust?"
+    assert helps[1]["answer"] == "points|Because of the borrow checker."
+    assert [a.kind for a in eng.session.assists] == ["answer", "points"]
+
+
+def test_request_help_explicit_mode_overrides_the_decision(tmp_path, monkeypatch):
+    eng, events = _engine(tmp_path)
+    eng.start_meeting()
+    eng.session.set_me("A")
+    eng.session.add_utterance(1.0, "B", "Why Rust?")
+    monkeypatch.setattr(eng.assistant, "answer",
+                        lambda c, t, q, note="", on_delta=None, mode="answer": mode)
+    eng.request_help(mode="points")
+    eng.end_meeting()
+    helps = [e for e in events if e["type"] == "help"]
+    assert helps[0]["mode"] == "points"

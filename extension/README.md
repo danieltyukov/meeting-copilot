@@ -3,8 +3,10 @@
 <p align="center"><img src="../docs/extension.png" width="380" alt="Sparky side panel"></p>
 
 A browser version of the desktop copilot for **Google Meet and Microsoft Teams**
-(web). It transcribes the call's audio live and, on a click, drafts
-context-grounded **talking points** in a Chrome **side panel** you can read.
+(web). It transcribes the call's audio live and, on one click, drafts what you
+would say next in a Chrome **side panel**: a first-person **answer** if you were
+just asked something, **talking points** to keep the conversation going
+otherwise, both grounded in the context you pasted.
 
 It is a **visible aid**: it lives in the normal side panel and is **not hidden
 from screen sharing**. There is deliberately no stealth or anti-capture mode.
@@ -29,16 +31,27 @@ required (interview accommodations, and so on).
 
 1. Open your Meet or Teams call in a tab and **focus that tab**.
 2. Click the extension icon; the side panel opens. Accept the consent notice.
-3. Press **Start**. The first time, Chrome asks for **microphone** access (grant
-   it). It then captures two sources and the transcript fills in live (you still
-   hear the call normally).
+3. Press **Start**. The first time, Chrome asks to let Sparky **read and change
+   data on all websites**: that is the access Chrome requires before an
+   extension may capture a tab's audio, and it is only ever used for the call
+   tab. Accept it. (If you decline, a button **Allow capturing the call tab**
+   appears under Start/Stop and asks again; the alternative is to click the
+   Sparky toolbar icon while the call tab is in front, then Start.) It also
+   asks for **microphone** access. It then captures two sources and the
+   transcript fills in live (you still hear the call normally).
 4. **Speakers are detected automatically.** Your **mic** is always **Me**. The
    call's audio is split by Deepgram diarization, so several people on the far
    end become **Speaker 1**, **Speaker 2**, **Speaker 3** (a call with one other
    voice just reads **Speaker**). No manual marking. The `you` / `them` dots in
    the header light up when each side is being heard, so you can confirm capture.
-5. Press **Help** at any time to draft a first-person reply to the latest
-   question put to you.
+5. Press **Help** (or `h`, when the panel has focus) whenever you need
+   something to say. If the other side has put a question to you since you last
+   spoke, you get a spoken-length answer to it; otherwise you get three to five
+   first-person talking points that pick up from the last thing said, including
+   something to ask back. The box says which it chose (`Q:` or `From:`). The
+   note field above the buttons steers the next draft ("keep it to two
+   sentences", "bring up the migration"), and **Copy** puts the draft on the
+   clipboard. Pressing Help again while a draft is still streaming replaces it.
 6. Press **Stop** when done. The call is saved to **History** automatically.
 
 ## History
@@ -98,9 +111,9 @@ rendering path in code, and `node extension/test_history.cjs` for the history pa
   your mic ──────────────────→ Deepgram ──────────→ "Me"        ┐
   meeting tab (tabCapture) ───→ Deepgram (diarize) ─→ "Speaker N" ┘─→ live transcript
                                                                  │
-   your context + transcript + the latest question ──────────────┼─→ Anthropic API
+   your context + transcript + the question, or the last line ────┼─→ Anthropic API
                                                                  ↓
-                                            talking points in the side panel
+                                  an answer, or talking points, in the side panel
 ```
 
 - Cloud-only by nature (a browser cannot run local Whisper or a local LLM the way

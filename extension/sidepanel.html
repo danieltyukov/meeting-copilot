@@ -9,10 +9,10 @@
   <div id="gate" class="gate">
     <div class="gate-card">
       <h2><img src="icons/icon48.png" alt="" width="20" height="20" style="vertical-align:-4px;border-radius:5px"> Sparky</h2>
-      <p>This transcribes the <b>active meeting tab's audio</b> and drafts talking points.</p>
+      <p>This transcribes the <b>active meeting tab's audio</b> and drafts first-person answers and talking points.</p>
       <ul>
         <li>Only use it where you have <b>consent to transcribe</b> the call.</li>
-        <li>It's a <b>visible</b> aid — it is <b>not</b> hidden from screen sharing. Disclose it where required.</li>
+        <li>It is a <b>visible</b> aid: it is <b>not</b> hidden from screen sharing. Disclose it where required.</li>
         <li>Audio is sent to Deepgram; prompts go to the Anthropic API (your keys).</li>
       </ul>
       <label class="ack"><input type="checkbox" id="ackBox"> I understand and have consent to use this.</label>
@@ -31,40 +31,41 @@
   </header>
 
   <main>
-    <!-- Help box first: the answer you read aloud sits ABOVE the transcript. -->
+    <!-- Draft box first: what you read aloud sits ABOVE the transcript. -->
     <section class="pane answer">
-      <div class="pane-title">✋ Talking points — read this</div>
-      <div id="answer" class="answer"><div class="muted">Press “Help” for context-grounded points on the latest question.</div></div>
+      <div class="pane-title"><span>Read this aloud</span><button id="copyBtn" class="chip hidden" title="Copy the draft">Copy</button></div>
+      <div id="answer" class="answer"><div class="muted">Press <b>Help</b> (or <b>h</b>) whenever you need something to say. If you were just asked something you get a first-person answer; otherwise, talking points to keep the conversation going. Both are grounded in your context.</div></div>
     </section>
 
     <section class="pane">
       <div class="pane-title">Live transcript</div>
-      <div id="transcript" class="transcript"><div class="muted">Press Start, then talk — the call's audio is transcribed here.</div></div>
+      <div id="transcript" class="transcript"><div class="muted">Press Start. The call audio is transcribed here, labelled automatically.</div></div>
     </section>
 
     <section class="controls">
-      <input id="note" type="text" placeholder="optional: steer the next answer (e.g. 'keep it to 2 sentences')">
+      <input id="note" type="text" placeholder="optional: steer the next draft (e.g. 'keep it to 2 sentences', 'bring up the migration')">
       <div class="btns">
-        <button id="startBtn">▶ Start</button>
-        <button id="stopBtn" disabled>■ Stop</button>
-        <button id="helpBtn" class="primary">✋ Help</button>
+        <button id="startBtn">Start</button>
+        <button id="stopBtn" disabled>Stop</button>
+        <button id="helpBtn" class="primary" title="Draft what to say next (h)">Help</button>
       </div>
-      <button id="micBtn" class="hidden">🎤 Fix microphone access</button>
+      <button id="micBtn" class="hidden">Fix microphone access</button>
+      <button id="accessBtn" class="hidden">Allow capturing the call tab</button>
     </section>
 
     <details class="hist" id="histBox">
-      <summary>🗂 History<span id="histCount"></span> — saved transcripts</summary>
+      <summary>History<span id="histCount"></span>: saved transcripts</summary>
       <div id="histList" class="histlist"></div>
       <button id="histClear" class="chip danger hidden">Clear all</button>
     </details>
 
     <details class="ctx">
-      <summary>Your context (pasted) — used to ground answers</summary>
-      <textarea id="context" rows="5" placeholder="Paste anything useful: your résumé, the project/repo summary, the job description, key talking points…"></textarea>
+      <summary>Your context (pasted): grounds every draft</summary>
+      <textarea id="context" rows="5" placeholder="Paste anything useful: your CV, the project or repo summary, the job description, what you want to bring up..."></textarea>
     </details>
 
     <details class="settings">
-      <summary>⚙ Settings</summary>
+      <summary>Settings</summary>
       <label>Deepgram API key <input id="deepgramKey" type="password" placeholder="dg_..."></label>
       <label>Anthropic API key <input id="anthropicKey" type="password" placeholder="sk-ant-..."></label>
       <label>Answer model

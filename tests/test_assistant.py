@@ -33,7 +33,7 @@ def test_answer_blocking_path(monkeypatch):
     captured = {}
     monkeypatch.setattr(a, "is_available", lambda: True)
 
-    def fake_blocking(user):
+    def fake_blocking(user, mode="answer"):
         captured["u"] = user
         return "ANSWER"
 
@@ -48,7 +48,7 @@ def test_answer_streaming_path(monkeypatch):
     a = Assistant()
     monkeypatch.setattr(a, "is_available", lambda: True)
 
-    def fake_stream(user, on_delta):
+    def fake_stream(user, on_delta, mode="answer"):
         on_delta("Hello")
         on_delta("Hello world")
         return "Hello world"
@@ -93,7 +93,7 @@ class _FakeBackend:
     def set_model(self, m):
         self.model = m
 
-    def answer(self, c, t, q, note="", on_delta=None):
+    def answer(self, c, t, q, note="", on_delta=None, mode="answer"):
         self.calls += 1
         if self.raise_err:
             raise AssistantError(f"{self.name} boom")
@@ -188,3 +188,63 @@ def test_api_availability_from_key(monkeypatch):
     assert not ApiAssistant(api_key=None).is_available()
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-env")
     assert ApiAssistant(api_key=None).is_available()  # picks up env key
+
+
+# -- talking points mode ------------------------------------------------------
+def test_points_mode_has_its_own_system_rules():
+    from meeting_copilot.assistant import SYSTEM_RULES, system_rules
+    assert system_rules("answer") == SYSTEM_RULES
+    points = system_rules("points")
+    assert points != SYSTEM_RULES
+    assert "TALKING POINTS" in points.upper()
+    assert "FIRST PERSON" in points.upper()
+
+
+def test_points_prompt_anchors_on_the_last_line_not_a_question():
+    from meeting_copilot.assistant import build_user_prompt
+    p = build_user_prompt("CTX", "Speaker A: We shipped v2 last week.", "We shipped v2 last week.",
+                          mode="points")
+    assert "continue from here" in p.lower()
+    assert "LATEST QUESTION" not in p
+    assert p.rstrip().endswith("talking points:")
+
+
+def test_points_prompt_with_empty_transcript_asks_for_openers():
+    from meeting_copilot.assistant import build_user_prompt
+    p = build_user_prompt("CTX", "", "", mode="points")
+    assert "not started" in p.lower()
+
+
+def test_answer_mode_is_the_default_and_unchanged():
+    from meeting_copilot.assistant import build_user_prompt
+    assert build_user_prompt("c", "t", "q") == build_user_prompt("c", "t", "q", mode="answer")
+    assert "LATEST QUESTION" in build_user_prompt("c", "t", "q")
+
+
+def test_cli_answer_threads_mode_into_prompt_and_system(monkeypatch):
+    a = Assistant()
+    monkeypatch.setattr(a, "is_available", lambda: True)
+    seen = {}
+
+    def fake_blocking(user, mode="answer"):
+        seen["user"] = user
+        return "- point one"
+
+    monkeypatch.setattr(a, "_run_blocking", fake_blocking)
+    a.answer("ctx", "Speaker A: hi", "hi", mode="points")
+    assert "continue from here" in seen["user"].lower()
+    cmd = a._cmd("x", stream=False, mode="points")
+    sys_arg = cmd[cmd.index("--system-prompt") + 1]
+    assert "TALKING POINTS" in sys_arg.upper()
+
+
+def test_chain_passes_mode_through():
+    class _ModeBackend(_FakeBackend):
+        def answer(self, c, t, q, note="", on_delta=None, mode="answer"):
+            self.mode = mode
+            return mode
+
+    b = _ModeBackend("api")
+    ch = ChainAssistant([("api", b, True)], is_online=lambda: True)
+    assert ch.answer("c", "t", "q", mode="points") == "points"
+    assert b.mode == "points"

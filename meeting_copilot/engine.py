@@ -281,27 +281,37 @@ class CopilotEngine:
         self.monitor.stop()
 
     # -- help --------------------------------------------------------------
-    def request_help(self, note: str = "") -> None:
-        """Draft an answer to the latest question, streaming it as it generates.
+    def request_help(self, note: str = "", mode: str = "auto") -> None:
+        """Draft something for me to say, streaming it as it generates.
 
-        ``note`` is optional extra context the user typed; empty means behave
-        exactly as a plain help request.
+        ``mode`` is ``auto`` (the default: the session decides from the
+        transcript), ``answer`` (reply to the latest question; needs one) or
+        ``points`` (talking points to carry the conversation on from the last
+        thing said; works even before anyone has spoken, as openers). ``note``
+        is optional extra context the user typed.
         """
         with self._lock:
-            question = self.session.latest_question()
+            if mode == "auto":
+                mode, question = self.session.decide_help()
+            elif mode == "points":
+                anchor = self.session.last_line()
+                question = anchor.text if anchor else ""
+            else:
+                latest = self.session.latest_question()
+                question = latest.text if latest else None
             transcript = self.session.transcript_text()
         if question is None:
-            self._emit("info", msg="No question captured yet — start the meeting first.")
+            self._emit("info", msg="No question captured yet. Start the meeting first.")
             return
-        self._emit("help_started", question=question.text, note=note)
+        self._emit("help_started", question=question, note=note, mode=mode)
         try:
             answer = self.assistant.answer(
-                self.context, transcript, question.text, note=note,
-                on_delta=lambda text: self._emit("help_delta", text=text))
+                self.context, transcript, question, note=note,
+                on_delta=lambda text: self._emit("help_delta", text=text), mode=mode)
         except AssistantError as exc:
             self._emit("error", msg=f"assistant: {exc}")
             return
         served = getattr(self.assistant, "last_served", None) or self.answer_primary
         with self._lock:
-            self.session.add_assist(self._elapsed(), question.text, answer)
-        self._emit("help", question=question.text, answer=answer, served=served)
+            self.session.add_assist(self._elapsed(), question, answer, kind=mode)
+        self._emit("help", question=question, answer=answer, served=served, mode=mode)

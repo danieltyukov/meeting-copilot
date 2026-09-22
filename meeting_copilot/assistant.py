@@ -1,6 +1,12 @@
 """Draft a spoken answer, with an API-first / CLI-fallback strategy.
 
-Three pieces share one interface (``answer(ctx, transcript, q, note, on_delta)``):
+Three pieces share one interface (``answer(ctx, transcript, q, note, on_delta, mode)``),
+and every backend drafts in one of two modes:
+
+* ``answer`` (default) — a first-person reply to the latest question put to me.
+* ``points`` — first-person talking points to carry the conversation forward
+  from wherever it is: build on the last thing said, bring in something from my
+  context the other side has not heard yet, ask something back.
 
 * ``ApiAssistant`` — the Anthropic API via the official SDK, streamed. Fast and
   consistent (no subprocess cold-start; separate quota). Configured for speed:
@@ -42,6 +48,31 @@ who built this project would.
 important steer for what I want from the answer, and follow it closely.
 - Do not use any tools. Answer directly from what is provided."""
 
+POINTS_RULES = """You are my real-time meeting copilot. I am in a live conversation in person, \
+about the project described in the user's message. Read the project context and the live \
+transcript, then give me TALKING POINTS I can use to carry the conversation forward from \
+exactly where it is now.
+
+Rules:
+- 3 to 5 points. Each is ONE line I can say out loud as-is, in the FIRST PERSON, starting \
+with "- ". Nothing else: no preamble, no headings, no meta-commentary.
+- Pick up from the last thing said. Build on it, add something concrete from my context the \
+other side has not heard yet, or steer toward what I want to cover.
+- Make at least one point a question I can ask them, so the conversation keeps moving.
+- Be specific to THIS project; cite real details from the context. No generic filler.
+- If the conversation has not started yet, give me points to open with.
+- Several people may be in the room; "Speaker A", "Speaker B" and so on are different voices.
+- If the message contains a line starting with "MY EXTRA INSTRUCTION:", treat it as the most \
+important steer for what I want, and follow it closely.
+- Do not use any tools. Work directly from what is provided."""
+
+MODES = ("answer", "points")
+
+
+def system_rules(mode: str = "answer") -> str:
+    """The system prompt for a drafting mode (``answer`` or ``points``)."""
+    return POINTS_RULES if mode == "points" else SYSTEM_RULES
+
 # Friendly names the UI cycles through -> concrete API model IDs.
 API_MODEL_IDS = {
     "haiku": "claude-haiku-4-5",
@@ -62,15 +93,23 @@ class AssistantError(RuntimeError):
     pass
 
 
-def build_user_prompt(context: str, transcript: str, question: str, note: str = "") -> str:
+def build_user_prompt(context: str, transcript: str, question: str, note: str = "",
+                      mode: str = "answer") -> str:
+    """Assemble the user message. ``question`` is the latest question in ``answer``
+    mode and the last thing anyone said in ``points`` mode (empty before the
+    conversation starts)."""
     parts = [
         f"=== PROJECT CONTEXT ===\n{context.strip() or '(no context gathered)'}",
         f"=== CONVERSATION SO FAR ===\n{transcript.strip() or '(nothing yet)'}",
-        f"=== LATEST QUESTION (answer this) ===\n{question.strip()}",
     ]
+    if mode == "points":
+        anchor = question.strip() or "(the conversation has not started yet: give me points to open with)"
+        parts.append(f"=== LAST THING SAID (continue from here) ===\n{anchor}")
+    else:
+        parts.append(f"=== LATEST QUESTION (answer this) ===\n{question.strip()}")
     if note.strip():
         parts.append(f"MY EXTRA INSTRUCTION: {note.strip()}")
-    parts.append("Now write my spoken answer:")
+    parts.append("Now write my talking points:" if mode == "points" else "Now write my spoken answer:")
     return "\n\n".join(parts)
 
 
@@ -94,13 +133,14 @@ class CliAssistant:
     def set_effort(self, effort: str) -> None:
         self.effort = effort
 
-    def build_user_prompt(self, context: str, transcript: str, question: str, note: str = "") -> str:
-        return build_user_prompt(context, transcript, question, note)
+    def build_user_prompt(self, context: str, transcript: str, question: str, note: str = "",
+                          mode: str = "answer") -> str:
+        return build_user_prompt(context, transcript, question, note, mode)
 
-    def _cmd(self, user_prompt: str, stream: bool) -> list[str]:
+    def _cmd(self, user_prompt: str, stream: bool, mode: str = "answer") -> list[str]:
         cmd = [
             self.binary, "-p", user_prompt,
-            "--system-prompt", SYSTEM_RULES,
+            "--system-prompt", system_rules(mode),
             "--strict-mcp-config",          # skip loading configured MCP servers
             "--setting-sources", "",        # skip skills/plugins/hooks
             "--effort", self.effort,
@@ -124,19 +164,19 @@ class CliAssistant:
         return env
 
     def answer(self, context: str, transcript: str, question: str, note: str = "",
-               on_delta: Callable[[str], None] | None = None) -> str:
+               on_delta: Callable[[str], None] | None = None, mode: str = "answer") -> str:
         if not self.is_available():
             raise AssistantError(
                 f"'{self.binary}' CLI not found on PATH. Install/login to Claude Code first.")
-        user = build_user_prompt(context, transcript, question, note)
+        user = build_user_prompt(context, transcript, question, note, mode)
         if on_delta is None:
-            return self._run_blocking(user)
-        return self._run_streaming(user, on_delta)
+            return self._run_blocking(user, mode=mode)
+        return self._run_streaming(user, on_delta, mode=mode)
 
-    def _run_blocking(self, user: str) -> str:
+    def _run_blocking(self, user: str, mode: str = "answer") -> str:
         try:
             proc = subprocess.run(
-                self._cmd(user, stream=False), cwd=tempfile.gettempdir(),
+                self._cmd(user, stream=False, mode=mode), cwd=tempfile.gettempdir(),
                 capture_output=True, text=True, timeout=self.timeout, env=self._env())
         except subprocess.TimeoutExpired as exc:
             raise AssistantError(f"Claude timed out after {self.timeout}s") from exc
@@ -147,10 +187,11 @@ class CliAssistant:
             raise AssistantError("Claude returned an empty answer")
         return answer
 
-    def _run_streaming(self, user: str, on_delta: Callable[[str], None]) -> str:
+    def _run_streaming(self, user: str, on_delta: Callable[[str], None],
+                       mode: str = "answer") -> str:
         try:
             proc = subprocess.Popen(
-                self._cmd(user, stream=True), cwd=tempfile.gettempdir(),
+                self._cmd(user, stream=True, mode=mode), cwd=tempfile.gettempdir(),
                 stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
                 bufsize=1, env=self._env())
         except FileNotFoundError as exc:
@@ -231,16 +272,16 @@ class ApiAssistant:
         return self._client
 
     def answer(self, context: str, transcript: str, question: str, note: str = "",
-               on_delta: Callable[[str], None] | None = None) -> str:
+               on_delta: Callable[[str], None] | None = None, mode: str = "answer") -> str:
         client = self._ensure_client()
-        user = build_user_prompt(context, transcript, question, note)
+        user = build_user_prompt(context, transcript, question, note, mode)
         parts: list[str] = []
         try:
             # No `thinking` param => thinking off on haiku/sonnet/opus: fastest path.
             with client.messages.stream(
                 model=self._model_id(),
                 max_tokens=self.max_tokens,
-                system=SYSTEM_RULES,
+                system=system_rules(mode),
                 messages=[{"role": "user", "content": user}],
             ) as stream:
                 for text in stream.text_stream:
@@ -296,12 +337,12 @@ class OllamaAssistant:
             return False
 
     def answer(self, context: str, transcript: str, question: str, note: str = "",
-               on_delta: Callable[[str], None] | None = None) -> str:
-        user = build_user_prompt(context, transcript, question, note)
+               on_delta: Callable[[str], None] | None = None, mode: str = "answer") -> str:
+        user = build_user_prompt(context, transcript, question, note, mode)
         body = json.dumps({
             "model": self.model,
             "messages": [
-                {"role": "system", "content": SYSTEM_RULES},
+                {"role": "system", "content": system_rules(mode)},
                 {"role": "user", "content": user},
             ],
             "stream": True,
@@ -379,7 +420,7 @@ class ChainAssistant:
                 a.set_effort(effort)
 
     def answer(self, context: str, transcript: str, question: str, note: str = "",
-               on_delta: Callable[[str], None] | None = None) -> str:
+               on_delta: Callable[[str], None] | None = None, mode: str = "answer") -> str:
         online = self.is_online()
         candidates = [(n, a) for (n, a, net) in self.backends if online or not net]
         last_err: Exception | None = None
@@ -389,7 +430,7 @@ class ChainAssistant:
                 continue
             tried_any = True
             try:
-                result = a.answer(context, transcript, question, note, on_delta)
+                result = a.answer(context, transcript, question, note, on_delta, mode=mode)
                 self.last_served = name
                 return result
             except AssistantError as exc:

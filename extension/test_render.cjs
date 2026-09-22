@@ -31,7 +31,13 @@ function makeEl(id) {
   };
 }
 const els = {};
-const document = { getElementById: (id) => els[id] || (els[id] = makeEl(id)) };
+const docListeners = {};
+const document = {
+  getElementById: (id) => els[id] || (els[id] = makeEl(id)),
+  addEventListener: (type, fn) => { (docListeners[type] ||= []).push(fn); },
+  createElement: () => makeEl("tmp"),
+  body: { appendChild() {} },
+};
 
 // ---- chrome shim ----
 const store = {};
@@ -63,6 +69,7 @@ const ctx = {
   JSON, URLSearchParams, TextDecoder, TextEncoder, setTimeout, clearTimeout,
   navigator: { mediaDevices: { getUserMedia: async () => { throw new Error("no mic in test"); } } },
   fetch: async () => { throw new Error("no fetch in test"); },
+  AbortController,
 };
 vm.createContext(ctx);
 
@@ -176,7 +183,9 @@ check("short backchannels survive on both legs",
 check("transcriptText names each voice",
   /^Speaker 1: Tell me about yourself\nMe: Sure, here's a quick summary\.\nSpeaker 2: What about scaling\?/.test(ctx.transcriptText()),
   JSON.stringify(ctx.transcriptText()));
-check("latestQuestion still skips Me", ctx.latestQuestion() === "Right, yes.", ctx.latestQuestion());
+check("latestQuestion skips the backchannel for the real question",
+  ctx.latestQuestion() === "How do you handle schema migrations in production?", ctx.latestQuestion());
+check("lastLine is the newest line from anyone", ctx.lastLine() === "Right, yes.", ctx.lastLine());
 
 // 10) HTML escaping (no injection from transcript text).
 ctx.addFinal("them", [{ speaker: 0, text: "<script>alert(1)</script>" }]);
@@ -238,6 +247,7 @@ check("answer box is rendered above the transcript",
     const els2 = {};
     const doc2 = {
       getElementById: (id) => els2[id] || (els2[id] = makeEl(id)),
+      addEventListener() {},
       createElement: () => makeEl("tmp"),
       body: { appendChild() {} },
     };
@@ -246,6 +256,7 @@ check("answer box is rendered above the transcript",
       JSON, URLSearchParams, TextDecoder, TextEncoder, setTimeout, clearTimeout,
       navigator: { mediaDevices: { getUserMedia: async () => { throw new Error("no mic"); } } },
       fetch: async () => { throw new Error("no fetch in test"); },
+      AbortController,
     };
     ctx2.globalThis = ctx2;
     vm.createContext(ctx2);
@@ -273,6 +284,129 @@ check("answer box is rendered above the transcript",
   check("sidepanel.html loads history.js before sidepanel.js",
     html.indexOf('src="history.js"') > 0 && html.indexOf('src="history.js"') < html.indexOf('src="sidepanel.js"'),
     `history@${html.indexOf('src="history.js"')} sidepanel@${html.indexOf('src="sidepanel.js"')}`);
+
+  // 15) Talking points. A second drafting mode: first-person lines to carry the
+  //     conversation on from the last thing said, not a reply to a question.
+  {
+    check("points mode has its own system rules",
+      /TALKING POINTS/i.test(ctx.systemRules("points")) && ctx.systemRules("answer") !== ctx.systemRules("points"),
+      ctx.systemRules("points").slice(0, 80));
+    const ans = ctx.buildUserPrompt("Why Rust?", "", "answer");
+    const pts = ctx.buildUserPrompt("We shipped v2.", "", "points");
+    check("answer prompt asks for an answer to the latest question",
+      /LATEST QUESTION/.test(ans) && /spoken answer:$/.test(ans.trim()), ans.slice(-120));
+    check("points prompt continues from the last thing said",
+      /continue from here/i.test(pts) && !/LATEST QUESTION/.test(pts) && /talking points:$/.test(pts.trim()), pts.slice(-160));
+    check("points prompt with nothing said yet asks for openers",
+      /not started/i.test(ctx.buildUserPrompt("", "", "points")), ctx.buildUserPrompt("", "", "points").slice(-200));
+    check("one Help button, no second one to choose between",
+      /id="helpBtn"/.test(html) && !/pointsBtn/.test(html), "helpBtn only");
+
+    // The request itself: a fake streaming fetch records what was sent.
+    const sent = [];
+    function sseBody(text) {
+      const lines = [
+        `data: ${JSON.stringify({ type: "content_block_delta", delta: { type: "text_delta", text } })}\n`,
+        `data: ${JSON.stringify({ type: "message_stop" })}\n`,
+      ];
+      let i = 0;
+      return { getReader: () => ({ read: async () => (i < lines.length
+        ? { done: false, value: new TextEncoder().encode(lines[i++]) } : { done: true }) }) };
+    }
+    ctx.fetch = async (url, init) => {
+      const req = { url, body: JSON.parse(init.body), signal: init.signal };
+      sent.push(req);
+      await new Promise((r) => setTimeout(r, 5));
+      return { ok: true, body: sseBody(req.body.system.includes("TALKING") ? "- I can walk through v2." : "Because it is fast.") };
+    };
+    vm.runInContext("settings.anthropicKey = 'sk-test'", ctx);
+    // Top-level consts live in the scripts' shared lexical scope, not on ctx.
+    const U = vm.runInContext("utterances", ctx);
+    const say = (key, text) => U.push({ key, text, t: Date.now() });
+    U.length = 0;
+    say("int:0", "How do you handle schema migrations in production?");
+    say("me", "Expand and contract, with a backfill.");
+    say("int:0", "Right, yes.");
+
+    // Decided from the transcript: a backchannel after my answer means "carry on".
+    check("decideHelp: nothing asked since I spoke -> points from the last line",
+      JSON.stringify(ctx.decideHelp()) === JSON.stringify(["points", "Right, yes."]), JSON.stringify(ctx.decideHelp()));
+    await ctx.help();
+    const last = sent[sent.length - 1];
+    check("points request carries the points system prompt",
+      last && /TALKING POINTS/i.test(last.body.system), last && last.body.system.slice(0, 60));
+    check("points request continues from the last line",
+      last && /LAST THING SAID/.test(last.body.messages[0].content) && /Right, yes\./.test(last.body.messages[0].content),
+      last && last.body.messages[0].content.slice(-200));
+    check("the box shows the points once streamed", /I can walk through v2\./.test(els.answer._html), els.answer._html);
+    check("the box says what it continued from", /From: Right, yes\./.test(els.answer._html), els.answer._html);
+    check("status says the points are ready", /Talking points ready/.test(els.status._text), els.status._text);
+
+    say("int:0", "And how do you roll one back?");
+    check("decideHelp: a question since I spoke -> answer it, lead-in included",
+      JSON.stringify(ctx.decideHelp()) === JSON.stringify(["answer", "Right, yes. And how do you roll one back?"]), JSON.stringify(ctx.decideHelp()));
+    await ctx.help();
+    const autoReq = sent[sent.length - 1];
+    check("Help answers the pending question on its own",
+      !/TALKING/.test(autoReq.body.system) && /LATEST QUESTION[^]*roll one back/.test(autoReq.body.messages[0].content),
+      autoReq.body.messages[0].content.slice(-160));
+    U.pop();
+
+    await ctx.help("answer");
+    const ansReq = sent[sent.length - 1];
+    check("answer request still targets the real question",
+      /LATEST QUESTION[^]*schema migrations/.test(ansReq.body.messages[0].content), ansReq.body.messages[0].content.slice(-200));
+    check("the box shows the answer with its question", /Q: How do you handle schema migrations[^]*Because it is fast\./.test(els.answer._html), els.answer._html);
+
+    // Pressing twice must not interleave two streams: the first is aborted.
+    const p1 = ctx.help("points");
+    const p2 = ctx.help("answer");
+    await Promise.all([p1, p2]);
+    const [first, second] = sent.slice(-2);
+    check("a newer request aborts the one in flight", first.signal.aborted && !second.signal.aborted,
+      `first=${first.signal.aborted} second=${second.signal.aborted}`);
+    check("only the newest draft is shown", /Because it is fast\./.test(els.answer._html) && !/walk through v2/.test(els.answer._html), els.answer._html);
+
+    // Keyboard: h and t outside a text field; ignored while typing a note.
+    const before = sent.length;
+    const press = (key, tagName) => (docListeners.keydown || []).forEach((fn) => fn({ key, target: { tagName }, preventDefault() {} }));
+    press("h", "BODY"); await new Promise((r) => setTimeout(r, 20));
+    check("pressing h drafts, deciding from the transcript (points here)",
+      sent.length === before + 1 && /TALKING/.test(sent[sent.length - 1].body.system), sent.length - before);
+    press("t", "BODY"); await new Promise((r) => setTimeout(r, 20));
+    check("t is not a shortcut any more", sent.length === before + 1, sent.length - before);
+    press("h", "INPUT"); press("h", "TEXTAREA"); await new Promise((r) => setTimeout(r, 20));
+    check("keys typed into a field are left alone", sent.length === before + 1, sent.length - before);
+
+    // Nothing said yet: Help gives openers rather than complaining.
+    U.length = 0;
+    check("decideHelp: nothing yet -> openers", JSON.stringify(ctx.decideHelp()) === JSON.stringify(["points", ""]), JSON.stringify(ctx.decideHelp()));
+    await ctx.help();
+    check("Help with nothing captured drafts openers", /opening/i.test(els.answer._html) && /walk through v2/.test(els.answer._html), els.answer._html);
+    await ctx.help("answer");
+    check("a forced answer with nothing captured says so", /No question captured/.test(els.status._text), els.status._text);
+  }
+
+  // 16) The question picker, in isolation.
+  {
+    const U = vm.runInContext("utterances", ctx);
+    const say = (key, text) => U.push({ key, text, t: Date.now() });
+    U.length = 0;
+    say("int:0", "So, one more thing.");
+    say("int:0", "How did you test the migration path?");
+    check("a lead-in and its question arrive together",
+      ctx.latestQuestion() === "So, one more thing. How did you test the migration path?", ctx.latestQuestion());
+    U.length = 0;
+    say("int:0", "Tell me about the caching layer");
+    say("me", "Sure.");
+    check("a far-end line with no question mark is still the fallback",
+      ctx.latestQuestion() === "Tell me about the caching layer", ctx.latestQuestion());
+    U.length = 0;
+    say("int:0", "Why Rust?");
+    for (let i = 0; i < 12; i++) say("int:0", `statement number ${i}`);
+    check("a stale question far back is not dug up", !/Why Rust/.test(ctx.latestQuestion()), ctx.latestQuestion());
+    U.length = 0;
+  }
 
   console.log("\n" + (failures ? `${failures} FAIL` : "all passed") + "\n");
   process.exit(failures ? 1 : 0);

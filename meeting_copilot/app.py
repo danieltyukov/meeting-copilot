@@ -58,6 +58,7 @@ class CopilotTUI:
         self.answer: str | None = None
         self.answer_question: str | None = None
         self.answer_note: str = ""
+        self.answer_mode = "answer"   # "answer" | "points": what the help box holds
         self.answer_scroll = 0   # line offset for scrolling a long answer
         self.partial: tuple[str, str] | None = None  # (speaker name, live text)
         self._start_mono: float | None = None
@@ -87,7 +88,7 @@ class CopilotTUI:
                 self.state = e["state"]
                 if self.state == "recording":
                     self._start_mono = time.monotonic()
-                    self._set_status("Recording. Press 'h' the moment you need an answer.", "green")
+                    self._set_status("Recording. Press 'h' the moment you need something to say.", "green")
                 elif self.state == "ended":
                     self._start_mono = None
             elif t == "me":
@@ -98,7 +99,9 @@ class CopilotTUI:
                 self.answer_scroll = 0   # start each answer from the top
                 self.answer_question = e["question"]
                 self.answer_note = e.get("note", "")
-                self._set_status("Thinking…", "yellow")
+                self.answer_mode = e.get("mode", "answer")
+                self._set_status("Drafting talking points…" if self.answer_mode == "points"
+                                 else "Thinking…", "yellow")
             elif t == "help_delta":
                 self.thinking = False
                 self.answer = e["text"]  # streaming: grows token by token
@@ -106,25 +109,27 @@ class CopilotTUI:
                 self.thinking = False
                 self.answer_question = e["question"]
                 self.answer = e["answer"]
+                self.answer_mode = e.get("mode", self.answer_mode)
                 self.answer_active = e.get("served", self.answer_active)
-                self._set_status(f"Answer ready ({self.answer_active}) — read it out.", "bold green")
+                what = "Talking points" if self.answer_mode == "points" else "Answer"
+                self._set_status(f"{what} ready ({self.answer_active}). Read it out.", "bold green")
             elif t == "model":
-                self._set_status(f"Answer model → {e['model']}", "bold cyan")
+                self._set_status(f"Answer model: {e['model']}", "bold cyan")
             elif t == "answer_switch":   # a backend failed; the chain moves to the next
                 self.answer = None       # discard any partial stream from the failed one
-                self._set_status(f"⚠ Answers: {e.get('failed','?')} failed → trying next backend", "bold yellow")
+                self._set_status(f"Answers: {e.get('failed','?')} failed, trying the next backend", "bold yellow")
             elif t == "stt_switch":      # Deepgram dropped -> local Whisper
                 self.stt_active = e.get("backend", "local")
                 self.partial = None
-                self._set_status(f"⚠ Transcription: Deepgram → local Whisper ({e.get('reason','')})", "bold yellow")
+                self._set_status(f"Transcription: Deepgram dropped, now local Whisper ({e.get('reason','')})", "bold yellow")
             elif t == "connectivity":
                 self.online = e["online"]
                 if self.online:
-                    self._set_status("✓ Back online — cloud backends available again.", "bold green")
+                    self._set_status("Back online: cloud backends available again.", "bold green")
                 else:
-                    self._set_status("⚠ Offline — using local Whisper + local LLM.", "bold yellow")
+                    self._set_status("Offline: using local Whisper + local LLM.", "bold yellow")
             elif t == "exported":
-                self._set_status(f"Saved transcript → {e['path']}", "bold green")
+                self._set_status(f"Saved transcript to {e['path']}", "bold green")
             elif t == "info":
                 self._set_status(e["msg"], "dim")
             elif t == "ready":
@@ -158,8 +163,8 @@ class CopilotTUI:
         ans_tag = ans_disp if self.answer_active == ans_pref else f"[bold yellow]{ans_disp} (fallback)[/]"
 
         head = Text.from_markup(
-            f"{badge}[/]  {net}  ⏱ {elapsed}  "
-            f"🎙 {stt_tag}  🧠 {ans_tag}  🙋 me={me}"
+            f"{badge}[/]  {net}  {elapsed}  "
+            f"stt {stt_tag}  llm {ans_tag}  me={me}"
         )
         return Panel(head, title="Sparky", border_style="yellow")
 
@@ -182,10 +187,11 @@ class CopilotTUI:
         """Wrap the Q/note/answer into a flat list of styled lines for scrolling."""
         out: list[Text] = []
         if self.answer_question:
-            for ln in textwrap.wrap("Q: " + self.answer_question, width) or [""]:
+            lead = "From: " if self.answer_mode == "points" else "Q: "
+            for ln in textwrap.wrap(lead + self.answer_question, width) or [""]:
                 out.append(Text(ln, style="dim italic"))
         if self.answer_note:
-            for ln in textwrap.wrap("↳ " + self.answer_note, width) or [""]:
+            for ln in textwrap.wrap("Steer: " + self.answer_note, width) or [""]:
                 out.append(Text(ln, style="cyan italic"))
         out.append(Text(""))
         for para in (self.answer or "").split("\n"):
@@ -196,24 +202,30 @@ class CopilotTUI:
                 out.append(Text(ln, style="bold white"))
         return out
 
+    def _panel_title(self) -> str:
+        return ("Talking points: pick one and say it" if self.answer_mode == "points"
+                else "Help: read this aloud")
+
     def _answer_panel(self, lines: list[Text] | None, inner_height: int) -> Panel:
         if lines is None:  # nothing drafted yet
             if self.thinking:
-                inner: Group | Align = Align.center(
-                    Text("Drafting your answer…", style="yellow"), vertical="middle")
+                drafting = ("Drafting talking points…" if self.answer_mode == "points"
+                            else "Drafting your answer…")
+                inner: Group | Align = Align.center(Text(drafting, style="yellow"), vertical="middle")
                 border = "yellow"
             else:
                 inner = Align.center(
-                    Text("Press 'h' for a first-person answer to the latest question.",
+                    Text("'h' drafts what to say next: an answer if you were just asked "
+                         "something, talking points otherwise.",
                          style="dim"), vertical="middle")
                 border = "grey39"
-            return Panel(inner, title="✋ Help — read this aloud", border_style=border)
+            return Panel(inner, title=self._panel_title(), border_style=border)
 
         total = len(lines)
         start = self.answer_scroll
         end = min(total, start + inner_height)
         visible = lines[start:end] or [Text("")]
-        title = "✋ Help — read this aloud"
+        title = self._panel_title()
         if total > inner_height:  # scrollable: show position + hint
             title += f"   [{start + 1}-{end}/{total}] ↑/↓ scroll"
         border = "yellow" if self.thinking else "green"
@@ -233,7 +245,7 @@ class CopilotTUI:
         rows: list[Text] = [Text.from_markup(keys)]
         if self.note:
             note_line = Text()
-            note_line.append("📝 context queued: ", style="cyan")
+            note_line.append("context queued: ", style="cyan")
             note_line.append(self.note, style="italic cyan")
             rows.append(note_line)
         rows.append(Text(self.status, style=self.status_style))
@@ -310,7 +322,7 @@ class CopilotTUI:
         if ch in ("\r", "\n"):                    # save the note, leave compose
             self.note = self.note_buffer.strip()
             self.compose = False
-            self._set_status("Context saved — press 'h' to use it.", "cyan")
+            self._set_status("Context saved. Press 'h' to use it.", "cyan")
         elif ch == "\x1b":                         # Esc cancels the edit
             self.compose = False
             self.note_buffer = ""
@@ -334,7 +346,8 @@ class CopilotTUI:
                 threading.Thread(target=self.engine.end_meeting, daemon=True).start()
         elif low == "h":
             note, self.note = self.note, ""        # consume the queued note (one-shot)
-            threading.Thread(target=self.engine.request_help, args=(note,), daemon=True).start()
+            threading.Thread(target=self.engine.request_help, args=(note,),
+                             kwargs={"mode": "auto"}, daemon=True).start()
         elif low == "c":
             self.compose = True
             self.note_buffer = self.note           # edit any existing note
@@ -369,4 +382,4 @@ class CopilotTUI:
         # Leave the user with the last answer + where the transcript went.
         if self.answer:
             self.console.print(Panel(self.answer, title="Last drafted answer", border_style="green"))
-        self.console.print("[dim]Sparky — meeting copilot closed.[/]")
+        self.console.print("[dim]Sparky closed.[/]")

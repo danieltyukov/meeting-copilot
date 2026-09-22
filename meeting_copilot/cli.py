@@ -197,7 +197,7 @@ def _self_test(args) -> int:
     ok &= bool(ctx)
 
     print("-" * 30)
-    print("RESULT:", "ALL GOOD ✅" if ok else "PROBLEMS FOUND ❌")
+    print("RESULT:", "ALL GOOD" if ok else "PROBLEMS FOUND")
     return 0 if ok else 1
 
 
@@ -243,7 +243,7 @@ def _run_tui(args) -> int:
 
     engine = CopilotEngine(_make_config(args))
     if not engine.assistant.is_available():
-        print("Warning: 'claude' CLI not found — the 'help me!' feature will not work.",
+        print("Warning: 'claude' CLI not found. Answers and talking points will not work.",
               file=sys.stderr)
     CopilotTUI(engine, factory).run()
     return 0

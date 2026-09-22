@@ -4,10 +4,22 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "meeting-copilot"
-version = "0.2.0"
-description = "Sparky — live, on-device in-person meeting copilot: transcribe the room and draft first-person answers from your project's context."
+version = "0.3.0"
+description = "Sparky, a live meeting copilot: transcribe the room and draft first-person answers and talking points from your project's context."
 readme = "README.md"
+license = { text = "MIT" }
+authors = [{ name = "danieltyukov" }]
 requires-python = ">=3.10"
+keywords = ["meeting", "interview", "transcription", "deepgram", "whisper", "claude", "copilot"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3",
+    "Topic :: Multimedia :: Sound/Audio :: Speech",
+]
 dependencies = [
     "rich>=13",
     "numpy>=1.24",
@@ -19,6 +31,12 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["pytest>=7"]
+
+[project.urls]
+Homepage = "https://danieltyukov.github.io/meeting-copilot/"
+Source = "https://github.com/danieltyukov/meeting-copilot"
+Changelog = "https://github.com/danieltyukov/meeting-copilot/blob/main/CHANGELOG.md"
+Issues = "https://github.com/danieltyukov/meeting-copilot/issues"
 
 [project.scripts]
 meeting-copilot = "meeting_copilot.cli:main"

@@ -97,13 +97,13 @@ def test_help_box_renders_above_transcript(tmp_path):
 
     # Empty (initial) state: the placeholder help box still leads the transcript.
     out = render()
-    assert out.index("Help — read this aloud") < out.index("Live transcript")
+    assert out.index("Help: read this aloud") < out.index("Live transcript")
 
     # With a drafted answer the ordering must hold too.
     tui.answer_question = "Why this design?"
     tui.answer = "Because the thing you read aloud should be at eye level."
     out = render()
-    assert out.index("Help — read this aloud") < out.index("Live transcript")
+    assert out.index("Help: read this aloud") < out.index("Live transcript")
 
 
 def _tui_api_deepgram(tmp_path):
@@ -160,3 +160,56 @@ def test_help_served_updates_answer_active(tmp_path):
     assert tui.answer_active == "cli"
     tui._on_event({"type": "help", "question": "Q2?", "answer": "A2", "served": "api"})
     assert tui.answer_active == "api"   # reverts when the API works again
+
+
+# -- one key, two kinds of draft ----------------------------------------------
+def test_h_key_asks_the_engine_to_decide(tmp_path, monkeypatch):
+    tui = _tui(tmp_path)
+    calls = []
+    monkeypatch.setattr(tui.engine, "request_help",
+                        lambda note="", mode="auto": calls.append((note, mode)))
+    tui.note = "keep it short"
+    tui._command_key("h")
+    for _ in range(50):                      # the handler runs on a thread
+        if calls:
+            break
+        threading.Event().wait(0.02)
+    assert calls == [("keep it short", "auto")]
+    assert tui.note == ""                    # the queued note is consumed
+
+
+def test_t_is_not_a_command(tmp_path, monkeypatch):
+    tui = _tui(tmp_path)
+    calls = []
+    monkeypatch.setattr(tui.engine, "request_help", lambda *a, **k: calls.append(1))
+    tui._command_key("t")
+    threading.Event().wait(0.05)
+    assert calls == []
+
+
+def test_answer_panel_title_follows_the_mode(tmp_path):
+    tui = _tui(tmp_path)
+
+    def render():
+        tui.console = Console(width=90, height=30, record=True)
+        tui.console.print(tui._render())
+        return tui.console.export_text()
+
+    tui._on_event({"type": "help_started", "question": "Why?", "note": "", "mode": "points"})
+    tui._on_event({"type": "help", "question": "Why?", "answer": "- a point", "served": "cli",
+                   "mode": "points"})
+    out = render()
+    assert "Talking points" in out and "From: Why?" in out
+    tui._on_event({"type": "help_started", "question": "Why?", "note": "", "mode": "answer"})
+    tui._on_event({"type": "help", "question": "Why?", "answer": "Because.", "served": "cli",
+                   "mode": "answer"})
+    out = render()
+    assert "read this aloud" in out and "Q: Why?" in out and "Talking points" not in out
+
+
+def test_footer_lists_one_help_key(tmp_path):
+    tui = _tui(tmp_path)
+    tui.console = Console(width=120, height=30, record=True)
+    tui.console.print(tui._render())
+    out = tui.console.export_text()          # export clears the record: read it once
+    assert "h help!" in out and "t points" not in out

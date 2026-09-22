@@ -8,10 +8,23 @@ whole conversation to a Markdown file.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
 from pathlib import Path
+
+# A far-end line that reads as a question: it ends in "?" or opens the way a
+# spoken question does. Used to skip backchannels ("Right, yes.") when picking
+# what to answer.
+QUESTION_RE = re.compile(
+    r"\?\s*$|^(?:so[,\s]+)?(?:and[,\s]+)?(?:who|what|when|where|why|how|which|whose|can|could|"
+    r"would|should|do|does|did|is|are|was|were|will|have|has|tell me|walk me|talk me|"
+    r"describe|explain)\b", re.IGNORECASE)
+# How many far-end lines back a question is still worth answering; a run is the
+# tail of consecutive lines from one voice (a lead-in plus the question itself).
+QUESTION_LOOKBACK = 8
+RUN_MAX = 3
 
 
 class State(Enum):
@@ -30,8 +43,9 @@ class Utterance:
 @dataclass
 class Assist:
     t: float
-    question: str
+    question: str      # the question answered, or the line the points continue from
     answer: str
+    kind: str = "answer"   # "answer" | "points"
 
 
 def fmt_clock(seconds: float) -> str:
@@ -76,8 +90,8 @@ class Session:
         self.utterances.append(utt)
         return utt
 
-    def add_assist(self, t: float, question: str, answer: str) -> None:
-        self.assists.append(Assist(t=t, question=question, answer=answer))
+    def add_assist(self, t: float, question: str, answer: str, kind: str = "answer") -> None:
+        self.assists.append(Assist(t=t, question=question, answer=answer, kind=kind))
 
     # -- speaker naming ----------------------------------------------------
     def set_me(self, label: str | None) -> None:
@@ -96,19 +110,69 @@ class Session:
     def recent(self, n: int) -> list[Utterance]:
         return self.utterances[-n:]
 
-    def latest_question(self) -> Utterance | None:
-        """The most recent thing someone other than me said.
+    def last_line(self) -> Utterance | None:
+        """The newest utterance from anyone: where the conversation is right now."""
+        return self.utterances[-1] if self.utterances else None
 
-        Falls back to the most recent utterance overall when speakers are
-        unknown or everything is attributed to me.
+    def _far_end_since_me(self) -> list[Utterance]:
+        """Far-end lines since I last spoke, newest first (all far-end lines when
+        I have not spoken or am not marked), capped to the lookback window."""
+        out: list[Utterance] = []
+        for utt in reversed(self.utterances):
+            if self.me_label is not None and utt.speaker == self.me_label:
+                break
+            out.append(utt)
+            if len(out) >= QUESTION_LOOKBACK:
+                break
+        return out
+
+    def decide_help(self) -> tuple[str, str]:
+        """What one keypress should draft, from the transcript alone.
+
+        ``("answer", question)`` when the far end has put a question-shaped line
+        to me since I last spoke; otherwise ``("points", last line)``: I just
+        spoke, or they only acknowledged, or nothing has been said yet, so the
+        useful thing is what to say next. The anchor is empty before anyone speaks.
+        """
+        if any(QUESTION_RE.search(u.text) for u in self._far_end_since_me()):
+            q = self.latest_question()
+            return "answer", (q.text if q else "")
+        last = self.last_line()
+        return "points", (last.text if last else "")
+
+    def _is_far_end(self, utt: Utterance) -> bool:
+        return self.me_label is None or utt.speaker != self.me_label
+
+    def latest_question(self) -> Utterance | None:
+        """The far-end line worth answering right now.
+
+        The newest run of lines from one far-end voice is the default (joined,
+        so a lead-in and its question arrive together). When that run is just a
+        backchannel, the most recent question-shaped line a few lines back wins
+        instead. Falls back to the most recent utterance overall when speakers
+        are unknown or everything is attributed to me.
         """
         if not self.utterances:
             return None
-        if self.me_label is not None:
-            for utt in reversed(self.utterances):
-                if utt.speaker != self.me_label:
-                    return utt
-        return self.utterances[-1]
+        far = [u for u in self.utterances if self._is_far_end(u)]
+        if not far:
+            return self.utterances[-1]
+
+        # The tail run: consecutive far-end lines from the same voice, newest last.
+        run = [far[-1]]
+        for utt in reversed(far[:-1]):
+            if len(run) >= RUN_MAX or utt.speaker != run[0].speaker:
+                break
+            if self.utterances.index(utt) != self.utterances.index(run[0]) - 1:
+                break                        # something (my reply) sits in between
+            run.insert(0, utt)
+        joined = Utterance(t=run[0].t, speaker=run[0].speaker, text=" ".join(u.text for u in run))
+        if any(QUESTION_RE.search(u.text) for u in run):
+            return joined
+        for utt in reversed(far[-QUESTION_LOOKBACK:-len(run)]):
+            if QUESTION_RE.search(utt.text):
+                return utt
+        return joined
 
     def transcript_text(self, with_speakers: bool = True) -> str:
         lines = []
@@ -149,11 +213,19 @@ class Session:
             out.append("## Copilot assists")
             out.append("")
             for a in self.assists:
-                out.append(f"### [{fmt_clock(a.t)}] Question")
-                out.append("")
-                out.append(f"> {a.question}")
-                out.append("")
-                out.append("**Drafted answer:**")
+                if a.kind == "points":
+                    out.append(f"### [{fmt_clock(a.t)}] Talking points")
+                    out.append("")
+                    if a.question:
+                        out.append(f"> continuing from: {a.question}")
+                        out.append("")
+                    out.append("**Talking points:**")
+                else:
+                    out.append(f"### [{fmt_clock(a.t)}] Question")
+                    out.append("")
+                    out.append(f"> {a.question}")
+                    out.append("")
+                    out.append("**Drafted answer:**")
                 out.append("")
                 out.append(a.answer)
                 out.append("")
