@@ -1,0 +1,70 @@
+name: Bug report
+description: Something behaves differently from how it is documented.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        If this is a security problem, do not open an issue. Use the Security
+        tab and "Report a vulnerability" instead, as described in SECURITY.md.
+
+        Do not paste an API key, and think twice before pasting a transcript:
+        it is other people's words. A few lines with names removed are enough
+        for almost any report.
+
+  - type: dropdown
+    id: part
+    attributes:
+      label: Which part
+      multiple: true
+      options:
+        - Terminal app (meeting-copilot)
+        - Chrome extension (Sparky side panel)
+        - The project site
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: "`meeting-copilot --version`, or the version on the extension card, or the commit SHA."
+      placeholder: 0.3.0
+    validations:
+      required: true
+
+  - type: input
+    id: environment
+    attributes:
+      label: Environment
+      description: OS and version, Python version, Chrome version, and which backends were active (Deepgram or local Whisper; API, CLI or Ollama).
+      placeholder: Ubuntu 24.04, Python 3.12, Deepgram + Claude API
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Start the app in a repo with a README
+        2. Press s, say a few sentences, press h
+        3. The draft box shows ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected, and what happened instead
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Output, if any
+      description: "`meeting-copilot --self-test` output, the status line in the footer, or the side panel's diagnostic line (`ctx:running@48000Hz worklet ...`)."
+      render: text
+    validations:
+      required: false

@@ -1,0 +1,11 @@
+blank_issues_enabled: true
+contact_links:
+  - name: How it works
+    url: https://github.com/danieltyukov/meeting-copilot/blob/main/docs/ARCHITECTURE.md
+    about: The pipeline, the fallback chains, the question picker and the two prompt modes.
+  - name: Building and running it yourself
+    url: https://github.com/danieltyukov/meeting-copilot/blob/main/CONTRIBUTING.md
+    about: The layout, the three test suites, and loading the extension unpacked.
+  - name: Security report
+    url: https://github.com/danieltyukov/meeting-copilot/security/advisories/new
+    about: Report a vulnerability privately. Do not open a public issue for one.

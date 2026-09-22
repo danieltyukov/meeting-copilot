@@ -1,0 +1,48 @@
+name: Feature request
+description: Something the tool should do and does not.
+labels: [enhancement]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        A short list of non-goals, so a no comes early: the tool will not hide
+        itself from screen sharing, will not speak for you unprompted, and will
+        not add a server or an account. Everything else is open.
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      multiple: true
+      options:
+        - Terminal app
+        - Chrome extension
+        - Drafting (answers, talking points, prompts)
+        - Transcription and speakers
+        - Offline mode
+        - The project site
+    validations:
+      required: true
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: The situation
+      description: What you were doing in the meeting and what the tool did not help with. Describe the moment rather than the feature.
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What you would like it to do
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: What you tried instead
+      description: Including a steer typed into the note box, which covers more than it looks.
+    validations:
+      required: false
