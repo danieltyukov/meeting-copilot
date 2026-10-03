@@ -6,6 +6,16 @@ extension carry their own version numbers, both noted per release.
 
 ## [Unreleased]
 
+Extension 0.4.1.
+
+### Fixed
+- Extension: the call tab could not be captured once Chrome refused it. The
+  "Allow capturing the call tab" button asked for access to all sites, which
+  Chrome does not accept in place of a toolbar click on the call tab, so it
+  never helped. The button and the all-sites request are gone. A click on the
+  Sparky icon while the call tab is in front now joins the call to the running
+  recording, with no Stop and Start.
+
 ## [0.3.0] - 2026-09-22
 
 Extension 0.4.0.

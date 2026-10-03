@@ -51,8 +51,13 @@ const chrome = {
     },
     async set(obj) { Object.assign(store, JSON.parse(JSON.stringify(obj))); },
   } },
-  runtime: { async sendMessage() { return { ok: false, error: "test" }; } },
+  runtime: {
+    async sendMessage(m) { runtimeSent.push(m); return { ok: false, error: "test" }; },
+    onMessage: { addListener(fn) { runtimeListeners.push(fn); } },
+  },
 };
+const runtimeSent = [];
+const runtimeListeners = [];
 
 // ---- WebSocket shim (captures the last instance so we can feed it frames) ----
 let lastWS = null;
@@ -406,6 +411,25 @@ check("answer box is rendered above the transcript",
     for (let i = 0; i < 12; i++) say("int:0", `statement number ${i}`);
     check("a stale question far back is not dug up", !/Why Rust/.test(ctx.latestQuestion()), ctx.latestQuestion());
     U.length = 0;
+  }
+
+  // 17) A toolbar click on the call tab joins it to a recording that is missing it.
+  {
+    const invoked = async (tabId) => {
+      runtimeSent.length = 0;
+      runtimeListeners.forEach((fn) => fn({ target: "sidepanel", cmd: "tabInvoked", tabId }));
+      await new Promise((r) => setTimeout(r, 0));
+      return runtimeSent.filter((m) => m.cmd === "getStreamId");
+    };
+    vm.runInContext("recording = true; hub = {}; tabAttached = false;", ctx);
+    const asked = await invoked(42);
+    check("an icon click while recording asks for that tab's stream",
+      asked.length === 1 && asked[0].tabId === 42, JSON.stringify(asked));
+    check("a refused capture after the click is reported", /Tab capture failed: test/.test(els.status._text), els.status._text);
+    vm.runInContext("tabAttached = true;", ctx);
+    check("an icon click with the tab already attached does nothing", (await invoked(42)).length === 0);
+    vm.runInContext("recording = false; hub = null; tabAttached = false;", ctx);
+    check("an icon click while stopped does nothing", (await invoked(42)).length === 0);
   }
 
   console.log("\n" + (failures ? `${failures} FAIL` : "all passed") + "\n");

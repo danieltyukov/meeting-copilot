@@ -290,57 +290,42 @@ async function micPermissionState() {
   catch { return "unknown"; }
 }
 
-// ---- access to the call tab ----
-// tabCapture only works on a tab the extension was "invoked" on (a click on the
-// toolbar icon while that tab is in front) unless it holds all-sites host
-// access. The ritual is easy to miss mid-call, so Start asks for the access
-// once, and a button offers it again if the capture still fails.
-const ALL_SITES = { origins: ["<all_urls>"] };
-async function hasTabAccess() {
-  try { return await chrome.permissions.contains(ALL_SITES); } catch { return false; }
-}
-async function requestTabAccess() {
-  try { return await chrome.permissions.request(ALL_SITES); } catch { return false; }
-}
+// ---- the call tab ----
+// Chrome lets tabCapture take a tab only after the extension was invoked on it:
+// a click on the Sparky toolbar icon while that tab is in front. Nothing inside
+// this panel counts, and no host permission (<all_urls> included) replaces it.
+// The background reports each icon click, so a recording that is still missing
+// the call picks it up right then, with no Stop and Start.
 
 // The meeting tab -> the far end, diarized into separate voices.
-async function attachTab() {
-  const resp = await chrome.runtime.sendMessage({ target: "background", cmd: "getStreamId" });
+async function attachTab(tabId) {
+  const resp = await chrome.runtime.sendMessage({ target: "background", cmd: "getStreamId", tabId });
   if (!resp || !resp.ok) throw new Error(resp?.error || "unknown");
   const tab = await navigator.mediaDevices.getUserMedia({
     audio: { mandatory: { chromeMediaSource: "tab", chromeMediaSourceId: resp.streamId } },
   });
   attach("them", tab, { playback: true, diarize: true });  // playback so you still hear the call
   tabAttached = true;
-  $("accessBtn").classList.add("hidden");
   if (historyReady) noteSessionSource(resp.tabTitle);
   status("Capturing: " + (resp.tabTitle || "active tab"));
 }
 function onTabCaptureFailed(e) {
   const msg = String(e.message || e);
   if (/not been invoked|activeTab/i.test(msg)) {
-    $("accessBtn").classList.remove("hidden");
-    status("Chrome will not capture this tab yet. Press \"Allow capturing the call tab\" below "
-      + "(or click the Sparky toolbar icon while the call tab is in front, then Start).", true);
+    status("Chrome will not let Sparky hear this tab yet. Go to the call tab and click the "
+      + "Sparky icon in the toolbar (under the puzzle piece if it is not pinned). The call "
+      + "joins this recording by itself, no restart needed.", true);
   } else {
     status("Tab capture failed: " + msg, true);
   }
 }
-// The click on this button is the user gesture Chrome wants for the permission
-// prompt. Once granted, the tab joins the recording already in progress.
-async function onAccessBtn() {
-  const ok = await requestTabAccess();
-  if (!ok) {
-    return status("Access not granted. Alternative: click the Sparky toolbar icon while the call "
-      + "tab is in front, then press Start.", true);
-  }
-  if (recording && hub && !tabAttached) {
-    try { await attachTab(); render(); } catch (e) { onTabCaptureFailed(e); }
-  } else {
-    $("accessBtn").classList.add("hidden");
-    status("Access granted. Press Start.");
-  }
-}
+let tabAttaching = false;
+chrome.runtime.onMessage.addListener((msg) => {
+  if (msg?.target !== "sidepanel" || msg.cmd !== "tabInvoked") return;
+  if (!recording || !hub || tabAttached || tabAttaching) return;
+  tabAttaching = true;
+  attachTab(msg.tabId).then(render, onTabCaptureFailed).finally(() => { tabAttaching = false; });
+});
 
 // echoCancellation earns its keep when you're on speakers: without it the mic
 // re-hears the call and every line from the far end lands twice.
@@ -368,9 +353,6 @@ async function attachMic() {
 
 async function start() {
   if (!settings.deepgramKey) return status("Add your Deepgram key in Settings first.", true);
-  // First, while the Start click still counts as a gesture: one-time access to
-  // capture whichever tab the call is in.
-  if (!(await hasTabAccess())) await requestTabAccess();
   setState("recording");
   try {
     hub = await createAudioHub();            // resume() runs here, under the Start gesture
@@ -412,7 +394,6 @@ async function stop() {
   hub = null;
   micAttached = false;
   tabAttached = false;
-  $("accessBtn").classList.add("hidden");
   setState("stopped");
   updateDiag();
 
@@ -678,7 +659,6 @@ $("helpBtn").addEventListener("click", () => help());
 $("copyBtn").addEventListener("click", copyDraft);
 document.addEventListener("keydown", onShortcut);
 $("micBtn").addEventListener("click", onMicBtn);
-$("accessBtn").addEventListener("click", onAccessBtn);
 $("saveBtn").addEventListener("click", saveSettings);
 $("context").addEventListener("change", saveSettings);
 $("histList").addEventListener("click", onHistoryClick);

@@ -31,14 +31,13 @@ required (interview accommodations, and so on).
 
 1. Open your Meet or Teams call in a tab and **focus that tab**.
 2. Click the extension icon; the side panel opens. Accept the consent notice.
-3. Press **Start**. The first time, Chrome asks to let Sparky **read and change
-   data on all websites**: that is the access Chrome requires before an
-   extension may capture a tab's audio, and it is only ever used for the call
-   tab. Accept it. (If you decline, a button **Allow capturing the call tab**
-   appears under Start/Stop and asks again; the alternative is to click the
-   Sparky toolbar icon while the call tab is in front, then Start.) It also
-   asks for **microphone** access. It then captures two sources and the
-   transcript fills in live (you still hear the call normally).
+3. Press **Start**. Chrome only lets an extension capture a tab after its
+   toolbar icon was clicked on that tab, which step 2 did. If the panel was
+   opened from another tab, Sparky says so; go to the call tab and click the
+   Sparky icon once (under the puzzle piece if it is not pinned), and the call
+   joins the running recording without a restart. Start also asks for
+   **microphone** access. It then captures two sources and the transcript fills
+   in live (you still hear the call normally).
 4. **Speakers are detected automatically.** Your **mic** is always **Me**. The
    call's audio is split by Deepgram diarization, so several people on the far
    end become **Speaker 1**, **Speaker 2**, **Speaker 3** (a call with one other

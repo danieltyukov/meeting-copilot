@@ -37,12 +37,6 @@ the call happens so that closing the panel loses nothing. Nothing is put in
 - `downloads`: the Download button on a saved call.
 - Host access to `api.deepgram.com` and `api.anthropic.com`: the two services
   above, and no others.
-- Optional access to all sites, asked for on the first Start. Chrome only lets
-  an extension capture a tab's audio if it was clicked on that tab or holds this
-  access; the extension asks for it so that Start works on whichever tab your
-  call is in. It runs no scripts on any page and reads nothing but the call
-  tab's audio and the active tab's title. Revoke it at any time in
-  `chrome://extensions`; the toolbar-click route keeps working without it.
 
 The microphone is a normal browser permission, asked for once in a helper tab
 because Chrome does not show the prompt inside a side panel.
