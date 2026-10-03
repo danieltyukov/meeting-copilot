@@ -9,7 +9,10 @@ match the code that is already there.
       cli.py           entry point, flags, --self-test
       engine.py        audio -> transcription -> session -> answer chain
       app.py           the rich TUI and its keypress loop
-      session.py       transcript state, question picking, Markdown export
+      session.py       transcript state, question picking, names, Markdown export
+      names.py         who a voice is, from its introduction ("Hi, I'm Sarah")
+      roster.py        names from the meeting: a calendar invite, --people
+      clipboard.py     the y key: wl-copy, xclip, xsel, pbcopy, then OSC 52
       assistant.py     prompts and the Claude API -> CLI -> Ollama chain
       backends.py      Deepgram streaming and local Whisper, with fallback
       audio.py         ffmpeg capture and utterance segmentation
@@ -19,17 +22,22 @@ match the code that is already there.
     extension/         the Chrome side panel (Manifest V3, plain scripts)
       sidepanel.js     capture, transcript, drafting, keyboard shortcuts
       history.js       transcript persistence and labels, loaded first
+      names.js         the twin of names.py and roster.py's rules
+      roster.js        reads participant names off the call page (activeTab)
       deepgram.js      the browser Deepgram client
       audio.js         one AudioContext, worklet capture with a fallback
     tests/             pytest for the Python package
     site/              the project site, static, no build step
     docs/              brand assets, architecture notes, design specs
-    tools/             regenerates the icons and mock screenshots
+    tools/             regenerates the icons and screenshots; the e2e runners
 
 `session.py` and `assistant.py` know nothing about audio or the terminal, which
 is what lets the question picker and the prompts be tested without a
 microphone. The extension mirrors both in `sidepanel.js`; keep the two question
-pickers and the two prompt builders in step when you change one.
+pickers and the two prompt builders in step when you change one. The same goes
+for `names.py`/`roster.py` and `names.js`: both are held to the shared cases in
+`tests/name_cases.json` and `tests/roster_cases.json`, and a new edge case goes
+there, not into one side's tests only.
 
 ## Running the tests
 
@@ -38,11 +46,20 @@ pickers and the two prompt builders in step when you change one.
 .venv/bin/python -m pytest            # the Python package
 node extension/test_render.cjs        # the side panel, end to end through the real Deepgram parser
 node extension/test_history.cjs       # transcript persistence
+node extension/test_names.cjs         # speaker names, against the shared cases
 ```
 
 The Node tests have no dependencies. They load the real extension scripts into
 a `vm` context with a shimmed DOM, so a change to a script that breaks the
-render path fails here rather than in Chrome. CI runs all three on every push.
+render path fails here rather than in Chrome. CI runs all four on every push.
+
+Before a release, run the two end-to-end checks. They use real keys (from
+`~/.config/meeting-copilot/config.env`), so they are not in CI:
+
+```
+.venv/bin/python tools/e2e_terminal.py    # headless app on a generated three-voice meeting
+node tools/e2e_extension.mjs              # real Chrome on its own Xvfb display, real tab capture
+```
 
 ## Running the app
 

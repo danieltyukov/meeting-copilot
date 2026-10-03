@@ -6,15 +6,63 @@ extension carry their own version numbers, both noted per release.
 
 ## [Unreleased]
 
-Extension 0.4.1.
+## [0.4.0] - 2026-10-03
+
+Extension 0.5.0.
+
+### Added
+- Speakers by name. When a voice introduces itself ("Hi, I'm Sarah", "my name
+  is Priya Raman", "this is Marcus from design"), its lines read `Sarah:` from
+  then on, and the lines it already spoke are relabelled. The rule is cautious
+  ("I'm going to share my screen" or "I'm Dutch" never becomes a name), and the
+  terminal app and the panel share it, held to one set of test cases.
+- Names from the meeting itself. The panel reads the participant names Meet,
+  Teams or Zoom show on the call tab once you invoke Sparky there (names only,
+  nothing else on the page), and you can type names into the People row. The
+  terminal app reads the attendees of a calendar invite (`.ics`) in the launch
+  directory, or takes `--people "Sarah Chen, Marcus Lee"` or `--invite FILE`.
+  The list completes a short intro ("I'm Sarah" becomes Sarah Chen), names the
+  other side of a 1:1 as soon as they speak and the last unnamed voice in a
+  bigger call, never guesses between two candidates, and goes into the drafts.
+- Renaming by hand: the panel's People chips (or a click on a speaker label),
+  and `n` in the terminal app. A typed name always wins; an empty one hands the
+  voice back to automatic. Names are kept in saved calls and exports, with a
+  participants list.
+- Your own name (`--me` or `MY_NAME=` in the terminal app, a Settings field in
+  the panel). Drafts know who "I" am, and in the room, the voice that
+  introduces itself with your name is marked as you.
+- Terminal app: `y` copies the last draft (wl-copy, xclip, xsel, pbcopy, else
+  OSC 52 so it works over SSH), a mic dot in the header lights while speech is
+  heard, and a newer `h` replaces a draft that is still streaming.
+- Extension: Alt+Shift+S opens Sparky on the current tab. It counts as the
+  toolbar click Chrome requires before it lets an extension capture a tab.
+- End-to-end checks for both apps on a generated three-voice meeting with real
+  Deepgram and Claude (`tools/e2e_terminal.py`, `tools/e2e_extension.mjs`), and
+  shared name test cases run by pytest and Node in CI.
+
+### Changed
+- A refreshed look. The terminal app has rounded panels, a status pill, a
+  People line, a speaker column in the transcript and key caps. The side panel
+  has a system font, a draft card at the top, People chips, controls docked
+  at the bottom, and light and dark themes. The site is redesigned around the
+  people it is for, including those for whom live recall or speech is the hard
+  part.
+- Extension: the consent and disclosure notice is a calm welcome card shown
+  once, and again when its wording changes, instead of a gate on every open.
+  It keeps everything it said before and adds that participant names are read
+  from the call page, so everyone sees it once more after updating. Settings
+  can show it again.
 
 ### Fixed
 - Extension: the call tab could not be captured once Chrome refused it. The
   "Allow capturing the call tab" button asked for access to all sites, which
   Chrome does not accept in place of a toolbar click on the call tab, so it
   never helped. The button and the all-sites request are gone. A click on the
-  Sparky icon while the call tab is in front now joins the call to the running
-  recording, with no Stop and Start.
+  Sparky icon (or Alt+Shift+S) while the call tab is in front now joins the
+  call to the running recording, with no Stop and Start.
+- Terminal app: a failed draft no longer leaves "Drafting..." on screen, long
+  wrapped lines no longer push the newest transcript line out of view, and a
+  second meeting in one run no longer relabels the first meeting's lines.
 
 ## [0.3.0] - 2026-09-22
 
