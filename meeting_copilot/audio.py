@@ -23,6 +23,8 @@ from typing import Iterator
 
 import numpy as np
 
+from .exe import find_executable
+
 SAMPLE_RATE = 16000
 FRAME_MS = 30
 FRAME_SAMPLES = SAMPLE_RATE * FRAME_MS // 1000  # 480
@@ -31,6 +33,13 @@ FRAME_BYTES = FRAME_SAMPLES * 2  # int16
 
 class AudioError(RuntimeError):
     pass
+
+
+def _ffmpeg() -> str:
+    path = find_executable("ffmpeg")
+    if path is None:
+        raise AudioError("ffmpeg not found on PATH")
+    return path
 
 
 class _FfmpegSource:
@@ -45,7 +54,7 @@ class _FfmpegSource:
 
     def command(self) -> list[str]:
         return [
-            "ffmpeg", "-hide_banner", "-loglevel", "error",
+            _ffmpeg(), "-hide_banner", "-loglevel", "error",
             *self._inputs(),
             "-ac", "1", "-ar", str(SAMPLE_RATE), "-f", "s16le", "-",
         ]
@@ -57,8 +66,8 @@ class _FfmpegSource:
                 cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                 bufsize=FRAME_BYTES * 4,
             )
-        except FileNotFoundError as exc:
-            raise AudioError("ffmpeg not found on PATH") from exc
+        except OSError as exc:
+            raise AudioError(f"could not run ffmpeg: {exc}") from exc
         return self
 
     def __exit__(self, *exc) -> None:
@@ -161,11 +170,11 @@ def list_mics(platform: str = sys.platform) -> list[Mic]:
     try:
         # The device lists go to stderr, and the macOS and Windows ones exit
         # non-zero by design (there is no real input to open).
-        proc = subprocess.run(["ffmpeg", "-hide_banner", *_LIST_ARGS[desktop]],
+        proc = subprocess.run([_ffmpeg(), "-hide_banner", *_LIST_ARGS[desktop]],
                               capture_output=True, encoding="utf-8", errors="replace",
                               timeout=15)
-    except FileNotFoundError as exc:
-        raise AudioError("ffmpeg not found on PATH") from exc
+    except OSError as exc:
+        raise AudioError(f"could not run ffmpeg: {exc}") from exc
     except subprocess.TimeoutExpired as exc:
         raise AudioError("ffmpeg took too long to list the audio devices") from exc
     parse = {"linux": parse_pulse_sources, "darwin": parse_avfoundation_devices,

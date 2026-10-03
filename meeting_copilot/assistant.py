@@ -24,13 +24,14 @@ from __future__ import annotations
 
 import json
 import os
-import shutil
 import subprocess
 import tempfile
 import threading
 import urllib.error
 import urllib.request
 from typing import Callable
+
+from .exe import find_executable
 
 SYSTEM_RULES = """You are my real-time meeting copilot. I am in a live conversation in person, \
 about the project described in the user's message. Read the project context and the live \
@@ -145,7 +146,7 @@ class CliAssistant:
         self.people: list[str] = []
 
     def is_available(self) -> bool:
-        return shutil.which(self.binary) is not None
+        return find_executable(self.binary) is not None
 
     def set_model(self, model: str) -> None:
         self.model = model
@@ -168,7 +169,7 @@ class CliAssistant:
         # The prompt goes in on stdin: with the project context it runs past
         # Windows' 32K command-line limit, and past Linux's 128K per argument.
         cmd = [
-            shutil.which(self.binary) or self.binary, "-p",
+            find_executable(self.binary) or self.binary, "-p",
             "--system-prompt", system_rules(mode),
             "--strict-mcp-config",          # skip loading configured MCP servers
             "--setting-sources", "",        # skip skills/plugins/hooks
@@ -203,10 +204,16 @@ class CliAssistant:
             return self._run_blocking(user, mode=mode)
         return self._run_streaming(user, on_delta, mode=mode)
 
+    def _checked_cmd(self, stream: bool, mode: str) -> list[str]:
+        cmd = self._cmd(stream=stream, mode=mode)
+        if not os.path.isabs(cmd[0]):      # never a bare name: see exe.py
+            raise AssistantError(f"'{self.binary}' CLI not found on PATH.")
+        return cmd
+
     def _run_blocking(self, user: str, mode: str = "answer") -> str:
         try:
             proc = subprocess.run(
-                self._cmd(stream=False, mode=mode), cwd=tempfile.gettempdir(), input=user,
+                self._checked_cmd(stream=False, mode=mode), cwd=tempfile.gettempdir(), input=user,
                 capture_output=True, encoding="utf-8", errors="replace",
                 timeout=self.timeout, env=self._env())
         except subprocess.TimeoutExpired as exc:
@@ -222,7 +229,7 @@ class CliAssistant:
                        mode: str = "answer") -> str:
         try:
             proc = subprocess.Popen(
-                self._cmd(stream=True, mode=mode), cwd=tempfile.gettempdir(),
+                self._checked_cmd(stream=True, mode=mode), cwd=tempfile.gettempdir(),
                 stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                 encoding="utf-8", errors="replace", bufsize=1, env=self._env())
         except FileNotFoundError as exc:

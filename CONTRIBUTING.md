@@ -20,6 +20,7 @@ match the code that is already there.
       diarize.py       best-effort speaker clustering for the local path
       context.py       what the launch directory contributes to the prompt
       net.py           online/offline detection
+      exe.py           finds ffmpeg, git and claude on PATH, never in the launch dir
     extension/         the Chrome side panel (Manifest V3, plain scripts)
       sidepanel.js     capture, transcript, drafting, keyboard shortcuts
       history.js       transcript persistence and labels, loaded first

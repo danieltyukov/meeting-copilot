@@ -10,6 +10,8 @@ from __future__ import annotations
 import subprocess
 from pathlib import Path
 
+from .exe import find_executable
+
 # Directories that never carry useful meeting context and would blow the
 # budget if walked.
 IGNORE_DIRS = {
@@ -33,9 +35,12 @@ KEY_FILES = [
 
 
 def _run(cmd: list[str], cwd: Path) -> str:
+    exe = find_executable(cmd[0])
+    if exe is None:
+        return ""
     try:
         out = subprocess.run(
-            cmd, cwd=str(cwd), capture_output=True, encoding="utf-8", errors="replace",
+            [exe, *cmd[1:]], cwd=str(cwd), capture_output=True, encoding="utf-8", errors="replace",
             timeout=5,
         )
         return out.stdout.strip()

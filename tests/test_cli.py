@@ -62,6 +62,11 @@ def test_list_mics(monkeypatch, capsys, tmp_path):
     out = capsys.readouterr().out
     assert "* Microphone Array (Realtek(R) Audio)\n" in out
     assert "  alsa_input.usb  (Brio 105 Mono)\n" in out
+    assert "* is used by default." in out
+
+    monkeypatch.setattr(audio, "list_mics", lambda: [audio.Mic("MacBook Pro Microphone")])
+    assert cli.main(["--list-mics"]) == 0
+    assert "The system's default input is used." in capsys.readouterr().out
 
 
 def test_mic_flag_reaches_the_source(monkeypatch):

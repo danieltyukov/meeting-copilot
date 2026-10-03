@@ -27,6 +27,12 @@ extension carry their own version numbers, both noted per release.
 - Text is read and written as UTF-8 everywhere, so a config file saved with a
   BOM, non-ASCII commit messages, and names in any script work on Windows.
 
+### Security
+- ffmpeg, git, the `claude` CLI and the clipboard tools are looked up on PATH
+  only, and run by their full path. On Windows the current directory would
+  otherwise be searched first, and Sparky runs inside the project being
+  discussed, which may be someone else's repository.
+
 ## [0.4.2] - 2026-10-03
 
 Extension 0.5.2. The terminal app is unchanged apart from its version.

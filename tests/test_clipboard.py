@@ -15,16 +15,17 @@ class _Runs:
         self.calls = []
 
     def __call__(self, cmd, input=None, stdout=None, stderr=None, timeout=None):
-        self.calls.append((cmd[0], input))
+        name = cmd[0].rsplit("/", 1)[-1]          # run by the full path
+        self.calls.append((name, input))
         assert stdout is subprocess.DEVNULL and stderr is subprocess.DEVNULL
-        if cmd[0] in self.timeout:
+        if name in self.timeout:
             raise subprocess.TimeoutExpired(cmd, timeout)
-        return subprocess.CompletedProcess(cmd, 1 if cmd[0] in self.fail else 0)
+        return subprocess.CompletedProcess(cmd, 1 if name in self.fail else 0)
 
 
 def _setup(monkeypatch, installed, runs, native=None):
     monkeypatch.setattr(clipboard, "NATIVE", native)
-    monkeypatch.setattr(clipboard.shutil, "which",
+    monkeypatch.setattr(clipboard, "find_executable",
                         lambda name: f"/usr/bin/{name}" if name in installed else None)
     monkeypatch.setattr(clipboard.subprocess, "run", runs)
 

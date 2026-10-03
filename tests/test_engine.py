@@ -65,7 +65,7 @@ def test_pipeline_emits_utterance_and_exports(tmp_path):
     assert utts[0]["text"] == "hello world"
     assert len(eng.session.utterances) == 1
     assert path is not None and path.exists()
-    assert "hello world" in path.read_text()
+    assert "hello world" in path.read_text(encoding="utf-8")
 
 
 def test_ignores_audio_when_not_recording(tmp_path):
@@ -145,7 +145,7 @@ def test_export_falls_back_when_launch_dir_missing(tmp_path, monkeypatch):
     path = eng._safe_export()
     assert path is not None and path.exists()
     assert path.parent == home                  # fell back to home
-    assert "hello world" in path.read_text()
+    assert "hello world" in path.read_text(encoding="utf-8")
     assert any(e["type"] == "exported" for e in events)
 
 

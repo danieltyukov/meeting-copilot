@@ -10,13 +10,13 @@ from __future__ import annotations
 
 import argparse
 import os
-import shutil
 import sys
 from pathlib import Path
 
 from . import __version__
 from .assistant import DEFAULT_OLLAMA_MODEL
 from .engine import CopilotEngine, EngineConfig
+from .exe import find_executable
 
 CONFIG_ENV = Path.home() / ".config" / "meeting-copilot" / "config.env"
 
@@ -167,7 +167,10 @@ def _list_mics() -> int:
     for mic in mics:
         label = f"  ({mic.label})" if mic.label else ""
         print(f"{'*' if mic.default else ' '} {mic.name}{label}")
-    print("\n* is used by default. Pick another with: meeting-copilot --mic \"NAME\"")
+    # macOS does not say which input is its default, so nothing is starred there.
+    used = "* is used by default." if any(m.default for m in mics) else \
+        "The system's default input is used."
+    print(f"\n{used} Pick another with: meeting-copilot --mic \"NAME\"")
     return 0
 
 
@@ -186,7 +189,7 @@ def _self_test(args) -> int:
     online = check_online()
     print(f"[INFO] connectivity: {'● online' if online else '● OFFLINE'}")
 
-    have_ffmpeg = shutil.which("ffmpeg") is not None
+    have_ffmpeg = find_executable("ffmpeg") is not None
     print(f"[{'PASS' if have_ffmpeg else 'FAIL'}] ffmpeg on PATH"
           + ("" if have_ffmpeg else f" (install it: {_ffmpeg_hint()})"))
     ok &= have_ffmpeg

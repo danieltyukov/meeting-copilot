@@ -6,6 +6,12 @@ from meeting_copilot.app import CopilotTUI
 from meeting_copilot.engine import CopilotEngine, EngineConfig
 
 
+def _console(**kwargs):
+    # A CI runner has no VT console, so on Windows Rich would fall back to its
+    # legacy renderer (square box corners). Real terminals there support VT.
+    return Console(legacy_windows=False, **kwargs)
+
+
 def _tui(tmp_path):
     eng = CopilotEngine(EngineConfig(root=tmp_path))
     return CopilotTUI(eng, source_factory=lambda: None)
@@ -57,7 +63,7 @@ def _long_answer(n):
 
 def test_long_answer_grows_to_fit_tall_window(tmp_path):
     tui = _tui(tmp_path)
-    tui.console = Console(width=90, height=44, record=True)
+    tui.console = _console(width=90, height=44, record=True)
     tui.answer_question = "Why this design?"
     tui.answer = _long_answer(8)
     tui.console.print(tui._render())
@@ -72,7 +78,7 @@ def test_long_answer_scrolls_in_short_window(tmp_path):
     tui.answer = _long_answer(20)
 
     def render():
-        tui.console = Console(width=90, height=15, record=True)
+        tui.console = _console(width=90, height=15, record=True)
         tui.console.print(tui._render())
         return tui.console.export_text()
 
@@ -91,7 +97,7 @@ def test_help_box_renders_above_transcript(tmp_path):
     tui = _tui(tmp_path)
 
     def render():
-        tui.console = Console(width=90, height=44, record=True)
+        tui.console = _console(width=90, height=44, record=True)
         tui.console.print(tui._render())
         return tui.console.export_text()
 
@@ -110,7 +116,7 @@ def _tui_api_deepgram(tmp_path):
     eng = CopilotEngine(EngineConfig(root=tmp_path, stt_backend="deepgram",
                                      deepgram_api_key="x", anthropic_api_key="x"))
     tui = CopilotTUI(eng, source_factory=lambda: None)
-    tui.console = Console(width=130, height=30, record=True)
+    tui.console = _console(width=130, height=30, record=True)
     return tui
 
 
@@ -140,7 +146,7 @@ def test_header_online_offline_marker(tmp_path):
 
     tui._on_event({"type": "connectivity", "online": False})
     assert tui.online is False
-    tui.console = Console(width=130, height=30, record=True)
+    tui.console = _console(width=130, height=30, record=True)
     tui.console.print(tui._render())
     assert "OFFLINE" in tui.console.export_text()
 
@@ -191,7 +197,7 @@ def test_answer_panel_title_follows_the_mode(tmp_path):
     tui = _tui(tmp_path)
 
     def render():
-        tui.console = Console(width=90, height=30, record=True)
+        tui.console = _console(width=90, height=30, record=True)
         tui.console.print(tui._render())
         return tui.console.export_text()
 
@@ -209,7 +215,7 @@ def test_answer_panel_title_follows_the_mode(tmp_path):
 
 def test_footer_lists_one_help_key(tmp_path):
     tui = _tui(tmp_path)
-    tui.console = Console(width=120, height=30, record=True)
+    tui.console = _console(width=120, height=30, record=True)
     tui.console.print(tui._render())
     out = tui.console.export_text()          # export clears the record: read it once
     assert " h  help " in out and " t  points" not in out
@@ -217,7 +223,7 @@ def test_footer_lists_one_help_key(tmp_path):
 
 # -- names on screen ---------------------------------------------------------------
 def _render_text(tui, width=100, height=30):
-    tui.console = Console(width=width, height=height, record=True)
+    tui.console = _console(width=width, height=height, record=True)
     tui.console.print(tui._render())
     return tui.console.export_text()
 
@@ -406,8 +412,9 @@ def test_y_over_ssh_writes_osc52_to_the_terminal(tmp_path, monkeypatch):
     import io
     from meeting_copilot import clipboard
     tui = _tui(tmp_path)
-    tui.console = Console(file=io.StringIO(), width=80, height=24)
-    monkeypatch.setattr(clipboard.shutil, "which", lambda name: None)   # no tools
+    tui.console = _console(file=io.StringIO(), width=80, height=24)
+    monkeypatch.setattr(clipboard, "NATIVE", None)                      # not Windows
+    monkeypatch.setattr(clipboard, "find_executable", lambda name: None)   # no tools
     tui._on_event({"type": "help", "question": "Q?", "answer": "Draft.", "served": "cli"})
     tui._command_key("y")
     tui._copy_thread.join(5)
@@ -586,7 +593,7 @@ TRICKY = "Use [/x] and [bold]this[/bold], not :smile:"
 
 def test_the_last_draft_prints_literally_on_exit(tmp_path):
     tui = _tui(tmp_path)
-    tui.console = Console(width=100, height=20, record=True)
+    tui.console = _console(width=100, height=20, record=True)
     tui.answer = TRICKY
     tui._farewell()                              # raised MarkupError when parsed as markup
     out = tui.console.export_text()

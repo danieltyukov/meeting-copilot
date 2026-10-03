@@ -76,8 +76,8 @@ MY_NAME=Daniel          # Optional. Drafts know who you are, and Sparky can tell
 
 Sparky listens on the system's default input: the PulseAudio or PipeWire default
 source on Linux, the default input device on macOS, and on Windows the first
-microphone ffmpeg finds. `meeting-copilot --list-mics` shows what is there, with
-the one in use starred, and `--mic "NAME"` picks another. On macOS, the first
+microphone ffmpeg finds. `meeting-copilot --list-mics` shows what is there, and
+`--mic "NAME"` picks another. On macOS, the first
 start asks whether your terminal app may use the microphone; allow it, or turn it
 on later under System Settings > Privacy & Security > Microphone.
 

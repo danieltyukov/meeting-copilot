@@ -59,7 +59,7 @@ def test_export_markdown_and_file(tmp_path):
     dest = s.write_export(tmp_path)
     assert dest.exists()
     assert dest.name.startswith("meeting-")
-    assert dest.read_text().strip() == md.strip()
+    assert dest.read_text(encoding="utf-8").strip() == md.strip()
 
 
 def test_fmt_clock():

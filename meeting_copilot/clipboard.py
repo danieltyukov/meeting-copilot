@@ -10,11 +10,12 @@ the machine you are sitting at.
 from __future__ import annotations
 
 import base64
-import shutil
 import subprocess
 import sys
 import time
 from typing import Callable
+
+from .exe import find_executable
 
 TOOLS = [
     ("wl-copy", ["wl-copy"]),
@@ -95,12 +96,13 @@ def copy(text: str, write: Callable[[str], None] | None = None) -> str:
         except Exception:      # any failure here leaves the tools and OSC 52
             pass
     for name, cmd in TOOLS:
-        if shutil.which(cmd[0]) is None:
+        exe = find_executable(cmd[0])
+        if exe is None:
             continue
         try:
             # The tools fork a child that keeps serving the selection, so their
             # output must not be a pipe we wait on.
-            proc = subprocess.run(cmd, input=text.encode("utf-8"), stdout=subprocess.DEVNULL,
+            proc = subprocess.run([exe, *cmd[1:]], input=text.encode("utf-8"), stdout=subprocess.DEVNULL,
                                   stderr=subprocess.DEVNULL, timeout=2)
         except (OSError, subprocess.SubprocessError):
             continue
