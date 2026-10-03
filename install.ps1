@@ -21,17 +21,29 @@ if (-not (Get-Command ffmpeg -ErrorAction SilentlyContinue)) {
     Fail "ffmpeg not found. Install it first, e.g.:  winget install Gyan.FFmpeg`n    then open a new terminal so it is on PATH."
 }
 
-# The py launcher finds the newest install; a bare "python" can be the Store stub.
-if ($env:PYTHON) { $Python = @($env:PYTHON) }
-elseif (Get-Command py -ErrorAction SilentlyContinue) { $Python = @("py", "-3") }
-elseif (Get-Command python -ErrorAction SilentlyContinue) { $Python = @("python") }
-else { Fail "Python not found. Install Python 3.10 or newer, e.g.:  winget install Python.Python.3.12" }
-$PyExe, $PyArgs = $Python
-& $PyExe @PyArgs -c "import sys; sys.exit(sys.version_info < (3, 10))"
-if ($LASTEXITCODE -ne 0) {
-    Fail "$($Python -join ' ') is older than 3.10. Install a newer Python, or set PYTHON to one."
+function Find-Python([string]$Exe, [string[]]$Rest) {
+    # "version path" for a Python 3.10+, else nothing. A bare "python" can be
+    # the Microsoft Store stub; what it prints on stderr must not stop the script.
+    $ErrorActionPreference = "Continue"
+    if (-not (Get-Command $Exe -ErrorAction SilentlyContinue)) { return $null }
+    $Out = & $Exe @Rest -c "import sys; sys.exit(1) if sys.version_info < (3, 10) else print(sys.version.split()[0], sys.executable)" 2>$null
+    if ($LASTEXITCODE -eq 0 -and $Out) { return "$Out" }
+    return $null
 }
-$Found = & $PyExe @PyArgs -c "import sys; print(sys.version.split()[0], sys.executable)"
+
+$PyExe = $null
+$PyArgs = @()
+if ($env:PYTHON) {
+    if ($Found = Find-Python $env:PYTHON @()) { $PyExe = $env:PYTHON }
+} elseif ($Found = Find-Python "python" @()) {
+    $PyExe = "python"
+} elseif ($Found = Find-Python "py" @("-3")) {
+    $PyExe = "py"
+    $PyArgs = @("-3")
+}
+if (-not $PyExe) {
+    Fail "Python 3.10 or newer not found. Install it, e.g.:  winget install Python.Python.3.12`n    or set PYTHON to one."
+}
 Write-Host "    Python $Found"
 
 Write-Host "==> Creating venv at $Venv"
@@ -39,7 +51,7 @@ $VenvPython = Join-Path $Venv "Scripts\python.exe"
 if (-not (Test-Path $VenvPython)) {
     & $PyExe @PyArgs -m venv $Venv
     if ($LASTEXITCODE -ne 0 -or -not (Test-Path $VenvPython)) {
-        Fail "Could not create the venv with $($Python -join ' '). Set PYTHON to another Python 3.10+."
+        Fail "Could not create the venv with $PyExe $PyArgs. Set PYTHON to another Python 3.10+."
     }
 }
 

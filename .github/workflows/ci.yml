@@ -67,7 +67,8 @@ jobs:
         if: runner.os == 'Windows' && matrix.python == '3.12'
         shell: powershell
         run: |
-          py -0p
+          $r = "-3"; & py @r -c "print('scalar splat ran')"; "scalar splat exit=$LASTEXITCODE"
+          $a = @("-3"); & py @a -c "print('array splat ran')"; "array splat exit=$LASTEXITCODE"
           powershell -ExecutionPolicy Bypass -File install.ps1
           if ($LASTEXITCODE -ne 0) { Get-ChildItem -Force .venv, .venv\* -ErrorAction SilentlyContinue | Select-Object FullName; exit 1 }
           $env:Path = [Environment]::GetEnvironmentVariable("Path", "User") + ";" + $env:Path
