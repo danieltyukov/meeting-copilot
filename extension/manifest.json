@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Sparky",
-  "version": "0.5.1",
+  "version": "0.5.2",
   "description": "A meeting copilot: a live transcript with named speakers, plus first-person answers and talking points (Meet, Teams).",
   "permissions": ["tabCapture", "sidePanel", "storage", "tabs", "downloads", "activeTab", "scripting"],
   "host_permissions": [

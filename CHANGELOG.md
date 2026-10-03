@@ -6,6 +6,15 @@ extension carry their own version numbers, both noted per release.
 
 ## [Unreleased]
 
+## [0.4.2] - 2026-10-03
+
+Extension 0.5.2. The terminal app is unchanged apart from its version.
+
+### Removed
+- The panel's screen-sharing warning: the idle status line now says how to
+  start, and the welcome notice and the extension description no longer carry
+  it.
+
 ## [0.4.1] - 2026-10-03
 
 Extension 0.5.1.
