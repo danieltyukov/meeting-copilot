@@ -479,10 +479,10 @@ mark {
 .shot img { border-radius: 12px; border: 1px solid var(--t-border); box-shadow: 0 30px 60px -34px rgba(17, 22, 29, 0.55); }
 .shot.panel { max-width: 380px; justify-self: center; }
 
-/* Visible by design: back on the yellow */
+/* Where your data goes: back on the yellow */
 .band.sun { --focus: var(--hero-head); background: var(--hero); color: var(--hero-text); }
 .band.sun h2 { color: var(--hero-head); }
-.band.sun .two { margin-top: 1.8rem; }
+.band.sun h2 + p { margin-top: 1.8rem; }
 .band.sun p { max-width: 36rem; }
 .band.sun a { text-decoration-color: currentColor; font-weight: 700; }
 

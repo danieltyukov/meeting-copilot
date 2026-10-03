@@ -9,11 +9,6 @@ you would say next in a Chrome **side panel**: a first-person **answer** if you
 were just asked something, **talking points** to keep the conversation going
 otherwise, both grounded in the context you pasted.
 
-It is a **visible aid**: it lives in the normal side panel and is **not hidden
-from screen sharing**. There is deliberately no stealth or anti-capture mode.
-Use it where you have consent to transcribe the call, and disclose it where
-required (interview accommodations, and so on).
-
 ## Setup
 
 1. **Load the extension** (unpacked):
@@ -211,9 +206,6 @@ and `node extension/test_names.cjs` for name detection.)
 
 ## Limitations
 
-- **Not invisible to screen share**, by design. If you share your screen, this
-  panel is part of your screen. The honest path for a real need (anxiety or
-  accessibility, for example) is disclosure or an accommodation, not concealment.
 - Captures **two sources**: your microphone (which becomes "Me") and the meeting
   tab's audio (which becomes "Speaker N", or a name). Which *side* you are on is exact,
   because it comes from the capture source rather than a guess. Telling the

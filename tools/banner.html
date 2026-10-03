@@ -1,0 +1,52 @@
+<!doctype html>
+<!--
+  The README banner (docs/logo.png and docs/logo-dark.png), drawn with the site's
+  own stylesheet so the two cannot drift: same yellow, same type, same key in the
+  headline. Add ?dark for the dimmed amber variant. tools/render_sparky.sh
+  screenshots it in headless Chrome at 2x.
+-->
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Sparky banner</title>
+  <script>
+    document.documentElement.setAttribute("data-theme", location.search.includes("dark") ? "dark" : "light");
+  </script>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible+Mono:wght@400..700&family=Atkinson+Hyperlegible+Next:wght@400..800&display=block">
+  <link rel="stylesheet" href="../site/style.css">
+  <style>
+    html, body { background: transparent; }
+    .banner {
+      width: 1200px; height: 460px; border-radius: 28px; overflow: hidden;
+      display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 48px;
+      padding: 38px 76px 46px 64px; border: 0;
+    }
+    .banner .brand { font-size: 1.4rem; }
+    .banner .brand img { width: 32px; height: 32px; }
+    .banner h1 { font-size: 88px; margin-top: 26px; }
+    .banner .lede { font-size: 1.4rem; max-width: 42rem; margin-top: 24px; }
+    .banner .where {
+      margin-top: 18px; font-family: var(--mono); font-size: 1rem; color: var(--hero-muted);
+    }
+    .bird { width: 256px; height: 256px; }
+  </style>
+</head>
+<body>
+  <div class="banner hero">
+    <div>
+      <p class="brand">
+        <img class="mark-light" src="../site/assets/budgie-ink.svg" alt="">
+        <img class="mark-dark" src="../site/assets/icon.svg" alt="">
+        Sparky
+      </p>
+      <h1>Press <kbd class="cap">h</kbd>.<br>Say the next thing.</h1>
+      <p class="lede">A meeting copilot. On one keypress it drafts what you would say next, from the live transcript and your context.</p>
+      <p class="where">Terminal app for Linux &middot; Chrome side panel for Meet and Teams</p>
+    </div>
+    <div>
+      <img class="bird mark-light" src="../site/assets/budgie-ink.svg" alt="">
+      <img class="bird mark-dark" src="../site/assets/icon.svg" alt="">
+    </div>
+  </div>
+</body>
+</html>

@@ -1,5 +1,8 @@
 <p align="center">
-  <img src="docs/logo.png" width="760" alt="Sparky, a meeting copilot">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/logo-dark.png">
+    <img src="docs/logo.png" width="820" alt="Sparky. Press h. Say the next thing. A meeting copilot: on one keypress it drafts what you would say next, from the live transcript and your context.">
+  </picture>
 </p>
 
 <p align="center">
@@ -152,7 +155,7 @@ names throughout.
 
 ## Browser version (Google Meet / Teams)
 
-A **visible** Chrome side-panel build lives in [`extension/`](extension/). It
+A Chrome side-panel build lives in [`extension/`](extension/). It
 transcribes a Meet or Teams call and, on Help (or `h`), drafts the same answers
 and talking points in a panel, using the same Deepgram + Claude stack. Because it
 captures your mic and the call tab separately, it labels your own voice exactly,
@@ -167,9 +170,7 @@ named after the first question asked of you, and can be reopened, copied,
 downloaded as Markdown, renamed or deleted. Press **Alt+Shift+S** on the call
 tab to open Sparky there without reaching for the mouse.
 
-It is a normal, on-screen aid with no stealth or screen-share hiding, so use it
-where you have consent. See [`extension/README.md`](extension/README.md) for
-loading instructions.
+See [`extension/README.md`](extension/README.md) for loading instructions.
 
 ## How it works
 

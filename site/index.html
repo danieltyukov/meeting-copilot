@@ -70,7 +70,6 @@
             A Linux terminal app for the room you are in, or a side panel beside your Google Meet
             or Microsoft Teams call. Open source under the MIT licence, with the extension zip on the
             <a href="https://github.com/danieltyukov/meeting-copilot/releases/latest">latest release</a>.
-            A visible aid, built to be used with consent.
           </p>
         </div>
 
@@ -86,7 +85,7 @@
           <div class="term" id="demo" role="img" aria-label="The terminal app during a design review. The other voice is labelled Sarah, a name taken from the introduction. After the question about phase margin, the draft box holds a first-person answer to read aloud.">
             <div class="term-bar" aria-hidden="true"><span></span><span></span><span></span><b>meeting-copilot</b></div>
             <div class="tp tp-head">
-              <span class="tp-title"><b>Sparky</b> 0.4.0</span>
+              <span class="tp-title"><b>Sparky</b> 0.4.1</span>
               <div class="head-row">
                 <span class="head-left">
                   <span class="rec">&#9679; REC</span>
@@ -167,9 +166,7 @@
           </div>
         </dl>
         <p class="who-note">
-          It can be wrong, and it does not speak for you. If you use it for an accessibility need,
-          the honest route is to say so or to ask for an accommodation; more under
-          <a href="#visible">Visible by design</a>.
+          It can be wrong, and it does not speak for you.
         </p>
       </div>
     </section>
@@ -412,26 +409,17 @@ meeting-copilot --me Daniel</code></pre>
       </div>
     </section>
 
-    <section class="band sun" id="visible" aria-labelledby="visible-h">
+    <section class="band sun" id="privacy" aria-labelledby="privacy-h">
       <div class="wrap">
-        <h2 id="visible-h">Visible by design</h2>
-        <div class="two">
-          <p>
-            Sparky lives in the normal side panel or in your terminal. It is not hidden from screen
-            sharing, and there is no stealth mode; nothing that hides it will be merged. Use it
-            where you have consent to transcribe the conversation, and disclose it where that is
-            required. If you use it for an accessibility need, the honest route is to say so or to
-            ask for an accommodation, not to conceal it.
-          </p>
-          <p>
-            Audio goes to Deepgram when a key is set, and nowhere otherwise. Prompts, meaning your
-            context and the transcript, go to the Anthropic API or through the claude CLI, only
-            when you press the key. Names are worked out on your machine. Nothing goes to the
-            author, and there is no server. The full list is in
-            <a href="https://github.com/danieltyukov/meeting-copilot/blob/main/PRIVACY.md">PRIVACY.md</a>,
-            and how to report a problem in <a href="https://github.com/danieltyukov/meeting-copilot/blob/main/SECURITY.md">SECURITY.md</a>.
-          </p>
-        </div>
+        <h2 id="privacy-h">Where your data goes</h2>
+        <p>
+          Audio goes to Deepgram when a key is set, and nowhere otherwise. Prompts, meaning your
+          context and the transcript, go to the Anthropic API or through the claude CLI, only
+          when you press the key. Names are worked out on your machine. Nothing goes to the
+          author, and there is no server. The full list is in
+          <a href="https://github.com/danieltyukov/meeting-copilot/blob/main/PRIVACY.md">PRIVACY.md</a>,
+          and how to report a problem in <a href="https://github.com/danieltyukov/meeting-copilot/blob/main/SECURITY.md">SECURITY.md</a>.
+        </p>
       </div>
     </section>
   </main>
