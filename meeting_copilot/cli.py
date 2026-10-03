@@ -158,8 +158,8 @@ def _list_mics() -> int:
     try:
         mics = list_mics()
     except AudioError as exc:
-        print(f"Could not list microphones: {exc}. Install ffmpeg: {_ffmpeg_hint()}",
-              file=sys.stderr)
+        hint = f" Install it: {_ffmpeg_hint()}" if find_executable("ffmpeg") is None else ""
+        print(f"Could not list microphones: {exc}.{hint}", file=sys.stderr)
         return 1
     if not mics:
         print("ffmpeg found no microphones.")
@@ -331,7 +331,7 @@ def _run_tui(args) -> int:
 
 def _utf8_output() -> None:
     """On Windows, print UTF-8 even when piped: the locale code page there
-    cannot encode a speaker's name in most scripts, nor the header's dots."""
+    cannot encode names in most scripts, nor the self-test's online marker."""
     if sys.platform != "win32":
         return
     for stream in (sys.stdout, sys.stderr):
