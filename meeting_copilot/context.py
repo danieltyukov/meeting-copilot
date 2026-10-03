@@ -35,7 +35,8 @@ KEY_FILES = [
 def _run(cmd: list[str], cwd: Path) -> str:
     try:
         out = subprocess.run(
-            cmd, cwd=str(cwd), capture_output=True, text=True, timeout=5
+            cmd, cwd=str(cwd), capture_output=True, encoding="utf-8", errors="replace",
+            timeout=5,
         )
         return out.stdout.strip()
     except Exception:

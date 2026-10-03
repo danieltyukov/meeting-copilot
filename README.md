@@ -32,25 +32,54 @@
 
 ## Setup
 
-**Requirements:** `ffmpeg`, Python >= 3.10, and the `claude` CLI (logged in).
-Optional keys make it faster; both have automatic fallbacks if absent:
+Sparky runs on Linux, macOS and Windows. It needs `ffmpeg`, Python 3.10 or newer,
+and the `claude` CLI (Claude Code) signed in:
+
+| | ffmpeg | Python 3.10+ | Claude Code |
+|---|---|---|---|
+| Linux | `sudo apt install ffmpeg` (or your distro's package) | usually installed | `curl -fsSL https://claude.ai/install.sh \| bash` |
+| macOS | `brew install ffmpeg` | `brew install python` | `curl -fsSL https://claude.ai/install.sh \| bash` |
+| Windows | `winget install Gyan.FFmpeg` | `winget install Python.Python.3.12` | `irm https://claude.ai/install.ps1 \| iex` |
+
+Then install Sparky. On Linux and macOS:
 
 ```bash
 git clone https://github.com/danieltyukov/meeting-copilot.git && cd meeting-copilot
 ./install.sh           # creates a venv + installs `meeting-copilot` on your PATH
 ```
 
+On Windows, in PowerShell:
+
+```powershell
+git clone https://github.com/danieltyukov/meeting-copilot.git; cd meeting-copilot
+powershell -ExecutionPolicy Bypass -File install.ps1   # venv + `meeting-copilot` on your PATH
+```
+
+Or, on any of the three, without a clone: `uv tool install git+https://github.com/danieltyukov/meeting-copilot`
+(or the same with `pipx install`).
+
 > **No keys required.** Without them the app still runs, using local Whisper for
 > transcription and the `claude` CLI for answers. Keys only make it faster, and
 > each **falls back automatically** (even mid-meeting) if it is missing or fails.
 
-Optionally add keys to `~/.config/meeting-copilot/config.env` (chmod 600) for speed:
+Optionally add keys to `~/.config/meeting-copilot/config.env` for speed (on
+Windows that is `%USERPROFILE%\.config\meeting-copilot\config.env`; on Linux and
+macOS, `chmod 600` it):
 
 ```ini
 DEEPGRAM_API_KEY=...    # Faster streaming transcription.  Absent -> local Whisper.
 ANTHROPIC_API_KEY=...   # Faster answers (~1s).            Absent / on failure -> claude CLI.
 MY_NAME=Daniel          # Optional. Drafts know who you are, and Sparky can tell your voice apart.
 ```
+
+### The microphone
+
+Sparky listens on the system's default input: the PulseAudio or PipeWire default
+source on Linux, the default input device on macOS, and on Windows the first
+microphone ffmpeg finds. `meeting-copilot --list-mics` shows what is there, with
+the one in use starred, and `--mic "NAME"` picks another. On macOS, the first
+start asks whether your terminal app may use the microphone; allow it, or turn it
+on later under System Settings > Privacy & Security > Microphone.
 
 ### Offline operation (no Wi-Fi)
 
@@ -66,7 +95,8 @@ Transcription is fully offline already. For **offline answers**, install a local
 LLM once, while you still have internet:
 
 ```bash
-curl -fsSL https://ollama.com/install.sh | sh   # one-time
+curl -fsSL https://ollama.com/install.sh | sh   # one-time, Linux (macOS: brew install ollama,
+                                                # Windows: winget install Ollama.Ollama)
 ollama pull qwen3:4b-instruct-2507-q4_K_M       # ~2.5 GB, the default local model
 ```
 
@@ -79,7 +109,7 @@ If Wi-Fi drops mid-meeting, transcription and answers both switch to local
 automatically and the header flips to `● OFFLINE`. Run `meeting-copilot --self-test`
 to check whether offline answers are ready.
 
-Verify the full setup:
+Verify the full setup, microphone included:
 
 ```bash
 meeting-copilot --self-test
@@ -200,7 +230,7 @@ See [`extension/README.md`](extension/README.md) for loading instructions.
 
 Audio capture only *forwards* bytes; transcription and answer-drafting run off the
 capture loop, so the UI never blocks. Run the test suite with
-`.venv/bin/python -m pytest`.
+`.venv/bin/python -m pytest` (`.venv\Scripts\python -m pytest` on Windows).
 
 > Intended as a confidence aid and preparation tool. Cloud transcription streams
 > audio to Deepgram; run `--stt local` to keep everything on-device.

@@ -39,3 +39,31 @@ def test_people_and_invite_flags(monkeypatch, tmp_path):
     assert "~" not in str(cfg.invite)                  # expanded
     plain = _config([str(tmp_path)], monkeypatch)
     assert plain.people is None and plain.invite is None
+
+
+def test_config_env_saved_with_a_bom(monkeypatch, tmp_path):
+    """Windows editors can save UTF-8 with a BOM; the first key must still load."""
+    conf = tmp_path / "config.env"
+    conf.write_bytes("DEEPGRAM_API_KEY=dg\nMY_NAME=Zoë\n".encode("utf-8-sig"))
+    monkeypatch.setattr(cli, "CONFIG_ENV", conf)
+    env = {}
+    monkeypatch.setattr(cli.os, "environ", env)
+    cli.load_config_env()
+    assert env == {"DEEPGRAM_API_KEY": "dg", "MY_NAME": "Zoë"}
+
+
+def test_list_mics(monkeypatch, capsys, tmp_path):
+    from meeting_copilot import audio
+    monkeypatch.setattr(cli, "CONFIG_ENV", tmp_path / "absent.env")   # keep real keys out
+    mics = [audio.Mic("Microphone Array (Realtek(R) Audio)", default=True),
+            audio.Mic("alsa_input.usb", "Brio 105 Mono")]
+    monkeypatch.setattr(audio, "list_mics", lambda: mics)
+    assert cli.main(["--list-mics"]) == 0
+    out = capsys.readouterr().out
+    assert "* Microphone Array (Realtek(R) Audio)\n" in out
+    assert "  alsa_input.usb  (Brio 105 Mono)\n" in out
+
+
+def test_mic_flag_reaches_the_source(monkeypatch):
+    args = cli._build_parser().parse_args(["--mic", "Brio 105"])
+    assert args.mic == "Brio 105"

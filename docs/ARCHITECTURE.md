@@ -8,7 +8,8 @@ share the shapes below, and the tests hold them to it.
 ## The terminal app
 
 ```
-  mic / room audio            (audio.py: ffmpeg -> 16 kHz mono int16 frames)
+  mic / room audio            (audio.py: ffmpeg -> 16 kHz mono int16 frames; PulseAudio,
+        |                      AVFoundation or DirectShow input per desktop)
         |
         |-- LevelGate         (audio.py: per-frame RMS -> throttled "level" on/off)
         v
@@ -27,8 +28,9 @@ share the shapes below, and the tests hold them to it.
   ChainAssistant              (assistant.py: API -> claude CLI -> Ollama, skipping
         |                      network backends when offline)
         v  help_delta / help events
-  CopilotTUI                  (app.py: rich dashboard, raw-mode keys, answer box above
-                               the transcript; clipboard.py behind 'y')
+  CopilotTUI                  (app.py: rich dashboard, answer box above the transcript;
+                               keys.py: cbreak keys, msvcrt on Windows;
+                               clipboard.py behind 'y')
 ```
 
 `engine.py` owns the wiring and publishes events; the TUI only reads them. The
@@ -95,8 +97,9 @@ The engine publishes plain dicts with a `type`:
 - `state`, `connectivity`, `stt_switch`, `answer_switch`, `model`, `info`,
   `error`, `exported`, `ready`, `audio_stopped`.
 
-`y` copies the last finished draft with the first clipboard tool that works
-(wl-copy, xclip, xsel, pbcopy), and otherwise writes an OSC 52 escape so the
+`y` copies the last finished draft through the Win32 clipboard on Windows, or
+elsewhere with the first clipboard tool that works (wl-copy, xclip, xsel,
+pbcopy), and otherwise writes an OSC 52 escape so the
 terminal sets the clipboard, which is what makes it work over SSH. It runs on
 a side thread and reports in the status line, so a tool that hangs until its
 timeout never holds up the keys.

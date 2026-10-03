@@ -81,7 +81,7 @@ def test_long_answer_scrolls_in_short_window(tmp_path):
     assert "Paragraph number 0" in top
     assert "Paragraph number 19" not in top               # bottom hidden
     for _ in range(80):
-        tui._handle_arrow("[B")                           # scroll to the end
+        tui._handle_arrow("down")                         # scroll to the end
     bottom = render()
     assert "Paragraph number 19" in bottom                # now visible
 

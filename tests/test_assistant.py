@@ -1,3 +1,5 @@
+import sys
+
 import pytest
 
 from meeting_copilot.assistant import (DEFAULT_OLLAMA_MODEL, ApiAssistant, Assistant,
@@ -66,9 +68,35 @@ def test_model_and_effort_are_switchable():
     a.set_effort("high")
     assert a.model == "haiku"
     assert a.effort == "high"
-    cmd = a._cmd("hi", stream=False)
+    cmd = a._cmd(stream=False)
     assert "haiku" in cmd and "high" in cmd
     assert "--strict-mcp-config" in cmd  # startup stripped for speed
+
+
+# Stands in for claude: reads the prompt from stdin and reports what arrived.
+_ECHO = ("import json, sys; got = sys.stdin.buffer.read().decode('utf-8'); "
+         "said = 'got %d chars ending %s' % (len(got), got[-6:]); out = sys.stdout.buffer; "
+         "out.write((json.dumps({'type': 'result', 'result': said}) if '{mode}' == 'stream' "
+         "else said).encode('utf-8'))")
+
+
+def test_prompt_goes_through_stdin(monkeypatch):
+    """A prompt past Windows' 32K command-line limit arrives whole, UTF-8 intact."""
+    a = CliAssistant()
+    prompt = "x" * 200_000 + " Grüße"
+    expected = f"got {len(prompt)} chars ending  Grüße"
+
+    def fake_cmd(stream, mode="answer"):
+        return [sys.executable, "-c", _ECHO.replace("{mode}", "stream" if stream else "text")]
+
+    monkeypatch.setattr(a, "_cmd", fake_cmd)
+    assert a._run_blocking(prompt) == expected
+    assert a._run_streaming(prompt, on_delta=lambda text: None) == expected
+
+
+def test_prompt_is_not_an_argument():
+    cmd = CliAssistant()._cmd(stream=True)
+    assert cmd[1] == "-p" and cmd[2].startswith("--")
 
 
 def test_missing_binary_raises():
@@ -260,7 +288,7 @@ def test_cli_answer_threads_mode_into_prompt_and_system(monkeypatch):
     monkeypatch.setattr(a, "_run_blocking", fake_blocking)
     a.answer("ctx", "Speaker A: hi", "hi", mode="points")
     assert "continue from here" in seen["user"].lower()
-    cmd = a._cmd("x", stream=False, mode="points")
+    cmd = a._cmd(stream=False, mode="points")
     sys_arg = cmd[cmd.index("--system-prompt") + 1]
     assert "TALKING POINTS" in sys_arg.upper()
 

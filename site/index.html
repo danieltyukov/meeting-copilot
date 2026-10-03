@@ -67,7 +67,7 @@
             <a class="btn" href="#extension">Get the Chrome extension</a>
           </p>
           <p class="fine">
-            A Linux terminal app for the room you are in, or a side panel beside your Google Meet
+            A terminal app for Linux, macOS and Windows, for the room you are in, or a side panel beside your Google Meet
             or Microsoft Teams call. Open source under the MIT licence, with the extension zip on the
             <a href="https://github.com/danieltyukov/meeting-copilot/releases/latest">latest release</a>.
           </p>
@@ -334,8 +334,10 @@ cd meeting-copilot &amp;&amp; ./install.sh
 cd ~/your/project
 meeting-copilot --me Daniel</code></pre>
           <p>
-            Needs <code>ffmpeg</code>, Python 3.10 or newer, and the <code>claude</code> CLI signed
-            in. Optional keys, and your name as <code>MY_NAME=</code>, go in
+            Runs on Linux, macOS and Windows. On Windows, run
+            <code>powershell -ExecutionPolicy Bypass -File install.ps1</code> in place of
+            <code>./install.sh</code>. Needs <code>ffmpeg</code>, Python 3.10 or newer, and the
+            <code>claude</code> CLI signed in. Optional keys, and your name as <code>MY_NAME=</code>, go in
             <code>~/.config/meeting-copilot/config.env</code>. <code class="nobr">meeting-copilot --self-test</code>
             checks the install, offline path included.
           </p>

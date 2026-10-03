@@ -164,9 +164,11 @@ class CliAssistant:
         return build_user_prompt(context, transcript, question, note, mode, self.my_name,
                                  self.people)
 
-    def _cmd(self, user_prompt: str, stream: bool, mode: str = "answer") -> list[str]:
+    def _cmd(self, stream: bool, mode: str = "answer") -> list[str]:
+        # The prompt goes in on stdin: with the project context it runs past
+        # Windows' 32K command-line limit, and past Linux's 128K per argument.
         cmd = [
-            self.binary, "-p", user_prompt,
+            shutil.which(self.binary) or self.binary, "-p",
             "--system-prompt", system_rules(mode),
             "--strict-mcp-config",          # skip loading configured MCP servers
             "--setting-sources", "",        # skip skills/plugins/hooks
@@ -204,8 +206,9 @@ class CliAssistant:
     def _run_blocking(self, user: str, mode: str = "answer") -> str:
         try:
             proc = subprocess.run(
-                self._cmd(user, stream=False, mode=mode), cwd=tempfile.gettempdir(),
-                capture_output=True, text=True, timeout=self.timeout, env=self._env())
+                self._cmd(stream=False, mode=mode), cwd=tempfile.gettempdir(), input=user,
+                capture_output=True, encoding="utf-8", errors="replace",
+                timeout=self.timeout, env=self._env())
         except subprocess.TimeoutExpired as exc:
             raise AssistantError(f"Claude timed out after {self.timeout}s") from exc
         if proc.returncode != 0:
@@ -219,9 +222,9 @@ class CliAssistant:
                        mode: str = "answer") -> str:
         try:
             proc = subprocess.Popen(
-                self._cmd(user, stream=True, mode=mode), cwd=tempfile.gettempdir(),
-                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
-                bufsize=1, env=self._env())
+                self._cmd(stream=True, mode=mode), cwd=tempfile.gettempdir(),
+                stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                encoding="utf-8", errors="replace", bufsize=1, env=self._env())
         except FileNotFoundError as exc:
             raise AssistantError(f"Could not run '{self.binary}'") from exc
 
@@ -230,6 +233,13 @@ class CliAssistant:
         parts: list[str] = []
         result: str | None = None
         try:
+            try:
+                # claude reads all of stdin before it answers, so writing it
+                # first cannot leave stdout full and both sides waiting.
+                proc.stdin.write(user)  # type: ignore[union-attr]
+                proc.stdin.close()      # type: ignore[union-attr]
+            except OSError:
+                pass                    # it exited early; stderr says why below
             for line in proc.stdout:  # type: ignore[union-attr]
                 line = line.strip()
                 if not line:

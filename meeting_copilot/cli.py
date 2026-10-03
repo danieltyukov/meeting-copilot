@@ -29,7 +29,8 @@ def load_config_env() -> None:
     if not CONFIG_ENV.is_file():
         return
     try:
-        for line in CONFIG_ENV.read_text().splitlines():
+        # utf-8-sig: Windows editors may save a BOM, which would hide the first key.
+        for line in CONFIG_ENV.read_text(encoding="utf-8-sig").splitlines():
             line = line.strip()
             if not line or line.startswith("#") or "=" not in line:
                 continue
@@ -86,6 +87,11 @@ def _build_parser() -> argparse.ArgumentParser:
                    help="Max characters of project context sent to the model "
                         "(default: 60000). Raise it for a rich, hand-written "
                         "context (e.g. a presentation/slide deck), lower it to cut cost.")
+    p.add_argument("--mic", metavar="DEVICE", default=None,
+                   help="Microphone to listen on, by the name --list-mics shows "
+                        "(default: the system default; on Windows the first one found).")
+    p.add_argument("--list-mics", action="store_true",
+                   help="List the microphones ffmpeg can open here, then exit.")
     p.add_argument("--audio-file", default=None,
                    help="Use an audio file instead of the microphone (demo/testing).")
     p.add_argument("--headless", action="store_true",
@@ -136,6 +142,35 @@ def _make_config(args) -> EngineConfig:
     )
 
 
+FFMPEG_HINTS = {
+    "darwin": "brew install ffmpeg",
+    "win32": "winget install Gyan.FFmpeg",
+}
+
+
+def _ffmpeg_hint() -> str:
+    return FFMPEG_HINTS.get(sys.platform, "sudo apt install ffmpeg (or your distro's package)")
+
+
+def _list_mics() -> int:
+    from .audio import AudioError, list_mics
+
+    try:
+        mics = list_mics()
+    except AudioError as exc:
+        print(f"Could not list microphones: {exc}. Install ffmpeg: {_ffmpeg_hint()}",
+              file=sys.stderr)
+        return 1
+    if not mics:
+        print("ffmpeg found no microphones.")
+        return 1
+    for mic in mics:
+        label = f"  ({mic.label})" if mic.label else ""
+        print(f"{'*' if mic.default else ' '} {mic.name}{label}")
+    print("\n* is used by default. Pick another with: meeting-copilot --mic \"NAME\"")
+    return 0
+
+
 def _self_test(args) -> int:
     from .assistant import ApiAssistant, AssistantError, CliAssistant, OllamaAssistant
     from .context import gather_context
@@ -152,8 +187,25 @@ def _self_test(args) -> int:
     print(f"[INFO] connectivity: {'● online' if online else '● OFFLINE'}")
 
     have_ffmpeg = shutil.which("ffmpeg") is not None
-    print(f"[{'PASS' if have_ffmpeg else 'FAIL'}] ffmpeg on PATH")
+    print(f"[{'PASS' if have_ffmpeg else 'FAIL'}] ffmpeg on PATH"
+          + ("" if have_ffmpeg else f" (install it: {_ffmpeg_hint()})"))
     ok &= have_ffmpeg
+    if have_ffmpeg:
+        from .audio import AudioError, list_mics
+        try:
+            mics = list_mics()
+        except AudioError as exc:
+            mics, why = [], str(exc)
+        else:
+            why = "ffmpeg found none"
+        chosen = args.mic or next((m.name for m in mics if m.default), None)
+        if chosen:
+            print(f"[PASS] microphone: {chosen}")
+        elif sys.platform == "win32":
+            print(f"[FAIL] no microphone: {why}")       # nothing to fall back to
+            ok = False
+        else:
+            print("[INFO] microphone: the system default")
 
     # Offline path: local Whisper (transcription) + local LLM (answers).
     ollama = OllamaAssistant(model=args.ollama_model, host=args.ollama_host)
@@ -264,7 +316,7 @@ def _run_tui(args) -> int:
             return FileSource(args.audio_file, realtime=True)
     else:
         def factory():
-            return MicSource()
+            return MicSource(args.mic)
 
     engine = CopilotEngine(_make_config(args))
     if not engine.assistant.is_available():
@@ -274,9 +326,25 @@ def _run_tui(args) -> int:
     return 0
 
 
+def _utf8_output() -> None:
+    """On Windows, print UTF-8 even when piped: the locale code page there
+    cannot encode a speaker's name in most scripts, nor the header's dots."""
+    if sys.platform != "win32":
+        return
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace")
+        except (AttributeError, ValueError):
+            pass
+
+
 def main(argv: list[str] | None = None) -> int:
+    _utf8_output()
     load_config_env()
     args = _build_parser().parse_args(argv)
+
+    if args.list_mics:
+        return _list_mics()
 
     if args.print_context:
         from .context import gather_context

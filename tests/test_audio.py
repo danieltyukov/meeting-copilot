@@ -1,9 +1,13 @@
 import wave
 
 import numpy as np
+import pytest
 
-from meeting_copilot.audio import (FRAME_SAMPLES, FileSource, LevelGate, UtteranceSegmenter,
-                                  frame_rms)
+from meeting_copilot import audio
+from meeting_copilot.audio import (FRAME_SAMPLES, AudioError, FileSource, LevelGate, MicSource,
+                                   UtteranceSegmenter, frame_rms, mic_input_args,
+                                   parse_avfoundation_devices, parse_dshow_devices,
+                                   parse_pulse_sources)
 
 SR = 16000
 
@@ -108,3 +112,83 @@ def test_level_gate_throttles_reports():
     out = _feed(gate, [0.05, 0.0, 0.0] * 10)     # would flip every few frames
     assert len(out) <= 4
     assert all(b - a >= 10 for (a, _), (b, _) in zip(out, out[1:]))
+
+
+# -- the microphone on each desktop ---------------------------------------------
+PULSE = """Auto-detected sources for pulse:
+* alsa_input.usb-046d_Brio_105-02.mono-fallback [Brio 105 Mono] (none)
+  alsa_output.pci-0000_00_1f.3.analog-stereo.monitor [Monitor of Built-in Audio] (none)
+"""
+
+AVFOUNDATION = """[AVFoundation indev @ 0x7f8] AVFoundation video devices:
+[AVFoundation indev @ 0x7f8] [0] FaceTime HD Camera  [uid:0x1420000005ac8600]
+[AVFoundation indev @ 0x7f8] [1] Capture screen 0
+[AVFoundation indev @ 0x7f8] AVFoundation audio devices:
+[AVFoundation indev @ 0x7f8] [0] MacBook Pro Microphone  [uid:BuiltInMicrophoneDevice]
+[AVFoundation indev @ 0x7f8] [1] BlackHole 2ch
+: Input/output error
+"""
+
+DSHOW = """[dshow @ 000001f0] "Integrated Camera" (video)
+[dshow @ 000001f0]   Alternative name "@device_pnp_\\\\?\\usb#vid_04f2"
+[dshow @ 000001f0] "Microphone Array (Realtek(R) Audio)" (audio)
+[dshow @ 000001f0]   Alternative name "@device_cm_{33D9A762-90C8-11D0-BD43-00A0C911CE86}\\wave_{1}"
+[dshow @ 000001f0] "Mikrofon (USB Audio Device)" (audio)
+dummy: Immediate exit requested
+"""
+
+DSHOW_OLD = """[dshow @ 0000] DirectShow video devices (some may be both video and audio devices)
+[dshow @ 0000]  "Integrated Camera"
+[dshow @ 0000]     Alternative name "@device_pnp_usb"
+[dshow @ 0000] DirectShow audio devices
+[dshow @ 0000]  "Microphone (Realtek High Definition Audio)"
+[dshow @ 0000]     Alternative name "@device_cm_wave"
+"""
+
+
+def test_parse_pulse_sources_marks_the_default():
+    mics = parse_pulse_sources(PULSE)
+    assert [m.name for m in mics] == ["alsa_input.usb-046d_Brio_105-02.mono-fallback",
+                                      "alsa_output.pci-0000_00_1f.3.analog-stereo.monitor"]
+    assert mics[0].label == "Brio 105 Mono" and mics[0].default and not mics[1].default
+
+
+def test_parse_avfoundation_takes_audio_devices_only():
+    mics = parse_avfoundation_devices(AVFOUNDATION)
+    assert [m.name for m in mics] == ["MacBook Pro Microphone", "BlackHole 2ch"]
+    assert mics[0].label == "index 0"
+
+
+def test_parse_dshow_both_formats():
+    assert [m.name for m in parse_dshow_devices(DSHOW)] == [
+        "Microphone Array (Realtek(R) Audio)", "Mikrofon (USB Audio Device)"]
+    assert [m.name for m in parse_dshow_devices(DSHOW_OLD)] == [
+        "Microphone (Realtek High Definition Audio)"]
+    assert parse_dshow_devices(DSHOW)[0].default
+
+
+def test_mic_input_per_desktop(monkeypatch):
+    assert mic_input_args(None, "linux") == ["-f", "pulse", "-i", "default"]
+    assert mic_input_args("alsa_input.x", "linux") == ["-f", "pulse", "-i", "alsa_input.x"]
+    assert mic_input_args(None, "darwin") == ["-f", "avfoundation", "-i", ":default"]
+    assert mic_input_args("BlackHole 2ch", "darwin")[-1] == ":BlackHole 2ch"
+
+    monkeypatch.setattr(audio, "list_mics", lambda platform: parse_dshow_devices(DSHOW))
+    win = mic_input_args(None, "win32")
+    assert win[:2] == ["-f", "dshow"] and win[-1] == "audio=Microphone Array (Realtek(R) Audio)"
+    assert mic_input_args("Mikrofon (USB Audio Device)", "win32")[-1] == \
+        "audio=Mikrofon (USB Audio Device)"
+
+
+def test_no_windows_mic_is_a_clear_error(monkeypatch):
+    monkeypatch.setattr(audio, "list_mics", lambda platform: [])
+    with pytest.raises(AudioError, match="--list-mics"):
+        mic_input_args(None, "win32")
+
+
+def test_mic_source_resolves_its_input_on_start(monkeypatch):
+    calls = []
+    monkeypatch.setattr(audio, "mic_input_args", lambda device: calls.append(device) or ["-i", "x"])
+    src = MicSource("Brio")
+    assert calls == []                      # nothing runs until the meeting starts
+    assert src.command()[4:6] == ["-i", "x"] and calls == ["Brio"]

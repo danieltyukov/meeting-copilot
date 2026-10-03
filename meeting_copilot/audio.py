@@ -3,7 +3,8 @@
 Capture is done by piping raw 16 kHz mono PCM out of ``ffmpeg``. The same code
 path serves a live microphone and a pre-recorded file, which is what lets the
 whole pipeline be exercised headlessly (feed a WAV, get the same events the mic
-would produce).
+would produce). Only the ffmpeg input differs per desktop: PulseAudio on Linux
+(PipeWire serves the same API), AVFoundation on macOS, DirectShow on Windows.
 
 The segmenter turns the continuous frame stream into discrete *utterances* using
 a simple adaptive energy VAD: it accumulates speech and flushes a chunk once it
@@ -13,8 +14,11 @@ for transcription and speaker clustering alike.
 
 from __future__ import annotations
 
+import re
 import subprocess
+import sys
 from collections import deque
+from dataclasses import dataclass
 from typing import Iterator
 
 import numpy as np
@@ -32,18 +36,25 @@ class AudioError(RuntimeError):
 class _FfmpegSource:
     """Base: read raw s16le mono 16k frames from an ffmpeg stdout pipe."""
 
-    def __init__(self, input_args: list[str]) -> None:
-        self._cmd = [
-            "ffmpeg", "-hide_banner", "-loglevel", "error",
-            *input_args,
-            "-ac", "1", "-ar", str(SAMPLE_RATE), "-f", "s16le", "-",
-        ]
+    def __init__(self, input_args: list[str] | None = None) -> None:
+        self._input_args = input_args or []
         self._proc: subprocess.Popen | None = None
 
+    def _inputs(self) -> list[str]:
+        return self._input_args
+
+    def command(self) -> list[str]:
+        return [
+            "ffmpeg", "-hide_banner", "-loglevel", "error",
+            *self._inputs(),
+            "-ac", "1", "-ar", str(SAMPLE_RATE), "-f", "s16le", "-",
+        ]
+
     def __enter__(self) -> "_FfmpegSource":
+        cmd = self.command()
         try:
             self._proc = subprocess.Popen(
-                self._cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                 bufsize=FRAME_BYTES * 4,
             )
         except FileNotFoundError as exc:
@@ -85,10 +96,17 @@ class _FfmpegSource:
 
 
 class MicSource(_FfmpegSource):
-    """Live microphone via PulseAudio/PipeWire (default source)."""
+    """Live microphone. ``device`` picks one by the name ``list_mics`` gives;
+    without it the system default is used."""
 
-    def __init__(self, device: str = "default", backend: str = "pulse") -> None:
-        super().__init__(["-f", backend, "-i", device])
+    def __init__(self, device: str | None = None) -> None:
+        super().__init__()
+        self.device = device
+
+    def _inputs(self) -> list[str]:
+        # Resolved on start rather than here: finding a Windows mic runs
+        # ffmpeg, and a failure is then reported like any other capture error.
+        return mic_input_args(self.device)
 
 
 class FileSource(_FfmpegSource):
@@ -101,6 +119,109 @@ class FileSource(_FfmpegSource):
     def __init__(self, path: str, realtime: bool = False) -> None:
         args = ["-re", "-i", path] if realtime else ["-i", path]
         super().__init__(args)
+
+
+def _desktop(platform: str) -> str:
+    return platform if platform in ("darwin", "win32") else "linux"
+
+
+def mic_input_args(device: str | None = None, platform: str = sys.platform) -> list[str]:
+    """The ffmpeg input flags for a microphone on this desktop."""
+    desktop = _desktop(platform)
+    if desktop == "darwin":
+        return ["-f", "avfoundation", "-i", f":{device or 'default'}"]
+    if desktop == "win32":
+        # DirectShow has no "default" device, so take the first microphone.
+        name = device or next((m.name for m in list_mics(platform)), None)
+        if not name:
+            raise AudioError("no microphone found. Plug one in, or pick one with --mic "
+                             "(meeting-copilot --list-mics shows them)")
+        # DirectShow hands audio over in 500 ms blocks unless told otherwise.
+        return ["-f", "dshow", "-audio_buffer_size", "50", "-i", f"audio={name}"]
+    return ["-f", "pulse", "-i", device or "default"]
+
+
+@dataclass
+class Mic:
+    name: str             # what --mic takes
+    label: str = ""       # the system's description, when it differs from the name
+    default: bool = False
+
+
+_LIST_ARGS = {
+    "linux": ["-sources", "pulse"],
+    "darwin": ["-f", "avfoundation", "-list_devices", "true", "-i", ""],
+    "win32": ["-list_devices", "true", "-f", "dshow", "-i", "dummy"],
+}
+
+
+def list_mics(platform: str = sys.platform) -> list[Mic]:
+    """The audio inputs ffmpeg can open here, the one used by default marked."""
+    desktop = _desktop(platform)
+    try:
+        # The device lists go to stderr, and the macOS and Windows ones exit
+        # non-zero by design (there is no real input to open).
+        proc = subprocess.run(["ffmpeg", "-hide_banner", *_LIST_ARGS[desktop]],
+                              capture_output=True, encoding="utf-8", errors="replace",
+                              timeout=15)
+    except FileNotFoundError as exc:
+        raise AudioError("ffmpeg not found on PATH") from exc
+    except subprocess.TimeoutExpired as exc:
+        raise AudioError("ffmpeg took too long to list the audio devices") from exc
+    parse = {"linux": parse_pulse_sources, "darwin": parse_avfoundation_devices,
+             "win32": parse_dshow_devices}[desktop]
+    return parse(proc.stdout + proc.stderr)
+
+
+_PULSE_LINE = re.compile(r"^(?P<mark>[* ]) (?P<name>\S+)(?: \[(?P<label>.*?)\])?")
+
+
+def parse_pulse_sources(text: str) -> list[Mic]:
+    """``ffmpeg -sources pulse``: one source per line, the default starred."""
+    mics = []
+    for line in text.splitlines():
+        m = _PULSE_LINE.match(line)
+        if m:
+            mics.append(Mic(m["name"], m["label"] or "", m["mark"] == "*"))
+    return mics
+
+
+_AVF_LINE = re.compile(r"\]\s\[(?P<index>\d+)\] (?P<name>.+?)(?:\s+\[uid:.*)?$")
+
+
+def parse_avfoundation_devices(text: str) -> list[Mic]:
+    """``-f avfoundation -list_devices true``: video devices, then audio ones."""
+    mics, audio = [], False
+    for line in text.splitlines():
+        if "AVFoundation audio devices" in line:
+            audio = True
+        elif "AVFoundation video devices" in line:
+            audio = False
+        elif audio and (m := _AVF_LINE.search(line)):
+            mics.append(Mic(m["name"].strip(), f"index {m['index']}"))
+    return mics
+
+
+_DSHOW_LINE = re.compile(r'\]\s*"(?P<name>[^"]+)"\s*(?:\((?P<kinds>[^)]*)\))?\s*$')
+
+
+def parse_dshow_devices(text: str) -> list[Mic]:
+    """``-list_devices true -f dshow``. ffmpeg 5 and later tag each device
+    ``(audio)`` or ``(video)``; older builds list them under section headings."""
+    mics, section = [], None
+    for line in text.splitlines():
+        low = line.lower()
+        if "directshow audio devices" in low:
+            section = "audio"
+        elif "directshow video devices" in low:
+            section = "video"
+        elif "alternative name" not in low and (m := _DSHOW_LINE.search(line)):
+            kinds = m["kinds"]
+            if (kinds is not None and "audio" in kinds) or (kinds is None and section == "audio"):
+                mics.append(Mic(m["name"]))
+    if mics:
+        mics[0].default = True       # what mic_input_args falls back to
+    return mics
 
 
 def _rms(frame_f32: np.ndarray) -> float:

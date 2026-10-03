@@ -9,13 +9,9 @@ or the answer-generation work, which run on their own threads.
 
 from __future__ import annotations
 
-import select
-import sys
-import termios
 import textwrap
 import threading
 import time
-import tty
 from collections import deque
 
 from rich import box
@@ -30,6 +26,7 @@ from rich.text import Text
 
 from . import __version__, clipboard
 from .engine import ANSWER_MODELS, CopilotEngine
+from .keys import NAMED, read_keys
 from .roster import unused_roster
 from .session import display_name, fmt_clock
 
@@ -523,41 +520,27 @@ class CopilotTUI:
 
     # -- keyboard ----------------------------------------------------------
     def _keyboard_loop(self) -> None:
-        fd = sys.stdin.fileno()
-        old = termios.tcgetattr(fd)
-        try:
-            tty.setcbreak(fd)
-            while not self._quit.is_set():
-                ch = sys.stdin.read(1)
-                if not ch:
-                    continue
-                if ch == "\x1b":  # Esc, or the lead-in of an arrow/page key
-                    if select.select([sys.stdin], [], [], 0.04)[0]:
-                        seq = sys.stdin.read(2)            # e.g. "[A", "[B", "[5"
-                        if seq in ("[5", "[6") and select.select([sys.stdin], [], [], 0.01)[0]:
-                            sys.stdin.read(1)              # consume trailing "~"
-                        self._handle_arrow(seq)
-                        continue
-                    # lone Esc falls through (prompt cancel)
-                # Don't hold the render lock across dispatch: handlers call into
-                # the engine (which may block on a socket connect and emits events
-                # that re-enter the lock). The handlers only touch simple state.
-                if self.compose:
-                    self._compose_key(ch)
-                else:
-                    self._command_key(ch)
-        finally:
-            termios.tcsetattr(fd, termios.TCSADRAIN, old)
+        for key in read_keys(self._quit):
+            if key in NAMED:
+                self._handle_arrow(key)
+                continue
+            # Don't hold the render lock across dispatch: handlers call into
+            # the engine (which may block on a socket connect and emits events
+            # that re-enter the lock). The handlers only touch simple state.
+            if self.compose:
+                self._compose_key(key)
+            else:
+                self._command_key(key)
 
-    def _handle_arrow(self, seq: str) -> None:
+    def _handle_arrow(self, key: str) -> None:
         # Scroll the answer; the down direction is clamped to content in _render.
-        if seq == "[A":      # Up
+        if key == "up":
             self.answer_scroll = max(0, self.answer_scroll - 1)
-        elif seq == "[B":    # Down
+        elif key == "down":
             self.answer_scroll += 1
-        elif seq == "[5":    # PageUp
+        elif key == "pgup":
             self.answer_scroll = max(0, self.answer_scroll - 8)
-        elif seq == "[6":    # PageDown
+        elif key == "pgdn":
             self.answer_scroll += 8
 
     def _compose_key(self, ch: str) -> None:
@@ -655,7 +638,7 @@ class CopilotTUI:
 
     def _command_key(self, ch: str) -> None:
         low = ch.lower()
-        if low == "q":
+        if low == "q" or ch == "\x03":           # Ctrl-C arrives as a key on Windows
             self._quit.set()
         elif low == "s":
             if self.state != "recording":

@@ -6,6 +6,27 @@ extension carry their own version numbers, both noted per release.
 
 ## [Unreleased]
 
+### Added
+- The terminal app runs on macOS and Windows as well as Linux. The microphone
+  opens through AVFoundation on macOS and DirectShow on Windows (PulseAudio or
+  PipeWire on Linux, as before), keys are read from the Windows console, and
+  `y` copies through the Windows clipboard.
+- `install.ps1`, the Windows counterpart of `install.sh`. `install.sh` now
+  gives the macOS commands and checks for Python 3.10. On any of the three,
+  `uv tool install git+https://github.com/danieltyukov/meeting-copilot` works
+  without a clone.
+- `--list-mics` lists the microphones ffmpeg can open, the default starred,
+  and `--mic NAME` picks one. `--self-test` names the microphone it will use.
+- CI runs the Python suite, and each desktop's installer, on Linux, macOS and
+  Windows.
+
+### Fixed
+- The `claude` CLI fallback takes its prompt on stdin. As an argument, a long
+  meeting with a full project context could pass Linux's 128 KB limit for one
+  argument and fail, and on Windows it was always past the 32 KB command line.
+- Text is read and written as UTF-8 everywhere, so a config file saved with a
+  BOM, non-ASCII commit messages, and names in any script work on Windows.
+
 ## [0.4.2] - 2026-10-03
 
 Extension 0.5.2. The terminal app is unchanged apart from its version.
