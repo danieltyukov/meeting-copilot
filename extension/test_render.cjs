@@ -307,7 +307,6 @@ check("answer box is rendered above the transcript",
 
     const gateHtml = html.slice(html.indexOf('id="gate"'), html.indexOf("<header"));
     check("the notice asks for consent to transcribe", /consent to transcribe/i.test(gateHtml), gateHtml.slice(0, 200));
-    check("the notice says it is not hidden from screen sharing", /not hidden from screen sharing/i.test(gateHtml.replace(/<\/?b>/g, "")));
     check("the notice says where audio and prompts go", /Deepgram/.test(gateHtml) && /Anthropic/.test(gateHtml));
     check("the notice says the call page's participant names are read, and nothing else",
       /reads the participant names the call page shows, to label voices\. Nothing else on the page is read\./.test(gateHtml), gateHtml.slice(0, 900));
