@@ -55,6 +55,8 @@ jobs:
       # No dependencies: the real scripts run in a vm context with a shimmed DOM.
       - run: node extension/test_render.cjs
       - run: node extension/test_history.cjs
+      # Reads tests/name_cases.json, the same cases pytest runs against names.py.
+      - run: node extension/test_names.cjs
 
       - name: Manifest is valid JSON
         run: node -e "JSON.parse(require('fs').readFileSync('extension/manifest.json','utf8'))"
