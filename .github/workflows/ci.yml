@@ -67,8 +67,9 @@ jobs:
         if: runner.os == 'Windows' && matrix.python == '3.12'
         shell: powershell
         run: |
+          py -0p
           powershell -ExecutionPolicy Bypass -File install.ps1
-          if ($LASTEXITCODE -ne 0) { exit 1 }
+          if ($LASTEXITCODE -ne 0) { Get-ChildItem -Force .venv, .venv\* -ErrorAction SilentlyContinue | Select-Object FullName; exit 1 }
           $env:Path = [Environment]::GetEnvironmentVariable("Path", "User") + ";" + $env:Path
           meeting-copilot --version
           if ($LASTEXITCODE -ne 0) { exit 1 }

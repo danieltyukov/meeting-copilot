@@ -31,13 +31,17 @@ $PyExe, $PyArgs = $Python
 if ($LASTEXITCODE -ne 0) {
     Fail "$($Python -join ' ') is older than 3.10. Install a newer Python, or set PYTHON to one."
 }
+$Found = & $PyExe @PyArgs -c "import sys; print(sys.version.split()[0], sys.executable)"
+Write-Host "    Python $Found"
 
 Write-Host "==> Creating venv at $Venv"
-if (-not (Test-Path $Venv)) {
-    & $PyExe @PyArgs -m venv $Venv
-    if ($LASTEXITCODE -ne 0) { Fail "Could not create the venv." }
-}
 $VenvPython = Join-Path $Venv "Scripts\python.exe"
+if (-not (Test-Path $VenvPython)) {
+    & $PyExe @PyArgs -m venv $Venv
+    if ($LASTEXITCODE -ne 0 -or -not (Test-Path $VenvPython)) {
+        Fail "Could not create the venv with $($Python -join ' '). Set PYTHON to another Python 3.10+."
+    }
+}
 
 Write-Host "==> Installing package (this pulls faster-whisper, may take a minute)"
 & $VenvPython -m pip install --quiet --upgrade pip
