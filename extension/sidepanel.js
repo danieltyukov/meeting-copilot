@@ -2,7 +2,10 @@
 // taps two legs:
 //   • your microphone -> "Me"
 //   • the meeting tab  -> the far end, split by Deepgram diarization into
-//     "Speaker 1", "Speaker 2", … (plain "Speaker" while there's one)
+//     "Speaker 1", "Speaker 2", … (plain "Speaker" while there's one), each
+//     relabelled with a name once that voice introduces itself, or once it is
+//     the one voice left for the one name left on the call's roster (names.js,
+//     roster.js)
 // Each leg streams to its own Deepgram connection; drafts come from Claude in
 // one of two modes, decided from the transcript on each press of Help: an
 // "answer" to a question just put to you, or "points" (first-person talking
@@ -16,7 +19,9 @@ Rules:
 - First person, the words I'd say out loud. No preamble, no meta-commentary.
 - Concise and natural: speakable in about 20-40 seconds.
 - Be concrete and specific to my context when relevant.
-- Several people may be on the call; "Speaker 1/2/..." are different voices.
+- Several people may be on the call. My lines are labelled "Me". Other voices are labelled \
+by name when known (address them by it when that is natural), otherwise "Speaker 1", \
+"Speaker 2" and so on.
 - If the message has a line starting with "MY EXTRA INSTRUCTION:", follow it closely.`;
 
 const POINTS_RULES = `You are my real-time meeting copilot. Read my context and the live transcript, then \
@@ -29,44 +34,78 @@ side has not heard yet, or steer toward what I want to cover.
 - Make at least one point a question I can ask them, so the conversation keeps moving.
 - Be specific to my context; no generic filler.
 - If the conversation has not started yet, give me points to open with.
-- Several people may be on the call; "Speaker 1/2/..." are different voices.
+- Several people may be on the call. My lines are labelled "Me". Other voices are labelled \
+by name when known (address them by it when that is natural), otherwise "Speaker 1", \
+"Speaker 2" and so on.
 - If the message has a line starting with "MY EXTRA INSTRUCTION:", follow it closely.`;
 
 function systemRules(mode) { return mode === "points" ? POINTS_RULES : ANSWER_RULES; }
 
 const $ = (id) => document.getElementById(id);
-const settings = { deepgramKey: "", anthropicKey: "", model: "sonnet", language: "en", context: "" };
+const settings = { deepgramKey: "", anthropicKey: "", model: "sonnet", language: "en", context: "", myName: "" };
 
 // Everything this panel borrows from history.js. A side panel that Chrome kept
 // alive across an extension reload still runs the document it was opened with, so
 // a page from before history.js existed loads the new sidepanel.js against the old
-// script list — which surfaced as "endSession is not defined" thrown from a click
+// script list, which surfaced as "endSession is not defined" thrown from a click
 // handler, pointing at entirely the wrong file. Check once, say so plainly, and
 // keep transcription working without history rather than dying on Stop.
 const HISTORY_API = [
-  "beginSession", "noteSessionSource", "recordSession", "endSession", "autoTitleSession",
-  "listSessions", "renameSession", "deleteSession", "clearSessions",
+  "beginSession", "noteSessionSource", "recordSession", "flushSession", "endSession", "autoTitleSession",
+  "listSessions", "renameSession", "renameSpeaker", "deleteSession", "clearSessions",
   "sessionLines", "sessionText", "sessionMarkdown", "sessionFilename", "sessionMeta",
-  "sessionTitleHtml", "speakerLabel", "speakerClass", "escapeHtml",
+  "sessionTitleHtml", "speakerLabel", "speakerClass", "speakersHeard", "nameVoice", "escapeHtml",
 ];
 const historyMissing = HISTORY_API.filter((fn) => typeof globalThis[fn] !== "function");
 const historyReady = historyMissing.length === 0;
-const HISTORY_BROKEN = "History is unavailable — history.js did not load. Close the side panel and reopen it (Chrome keeps the old page alive across an extension reload).";
+const HISTORY_BROKEN = "History is unavailable: history.js did not load. Close the side panel and reopen it (Chrome keeps the old page alive across an extension reload).";
 
 if (!historyReady) {
-  // Stand-ins for the three display helpers, so a missing history.js costs you the
-  // history pane and nothing else — the live transcript still renders and labels.
+  // Stand-ins for the display and naming helpers, so a missing history.js costs
+  // you the history pane and nothing else: the live transcript still renders,
+  // labels, and takes names.
   globalThis.escapeHtml ||= (s) => String(s).replace(/[&<>"']/g,
     (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
-  globalThis.speakerLabel ||= (key, ord) => (key === "me" ? "Me"
-    : "Speaker" + (Object.keys(ord || {}).length > 1 ? " " + (ord[key] || 1) : ""));
+  globalThis.speakerLabel ||= (key, ord, names) => (key === "me" ? "Me" : (names && names[key])
+    || "Speaker" + (Object.keys(ord || {}).length > 1 ? " " + (ord[key] || 1) : ""));
   globalThis.speakerClass ||= (key) => (key === "me" ? "spk-Me" : "spk-Speaker");
-  console.error("Sparky: history.js missing —", historyMissing.join(", "));
+  globalThis.speakersHeard ||= (lines, ord) => [...new Set(lines.map((l) => l.key))]
+    .sort((a, b) => (a === "me" ? -1 : b === "me" ? 1 : (ord[a] || 0) - (ord[b] || 0)));
+  globalThis.nameVoice ||= (names, sources, key, typed) => {
+    const clean = String(typed || "").replace(/\s+/g, " ").trim().slice(0, 40);
+    if (key === "me") return;
+    if (clean) { names[key] = clean; sources[key] = "user"; } else { delete names[key]; delete sources[key]; }
+  };
+  console.error("Sparky: history.js missing:", historyMissing.join(", "));
+}
+// names.js came later still, so a panel kept open across the update can lack it
+// too. Voices then stay numbered until you name them by hand.
+const NAMES_API = ["detectName", "sameName", "cleanRosterName", "rosterOthers", "matchRoster",
+  "unusedRoster", "eliminate", "nameKey"];
+if (NAMES_API.some((fn) => typeof globalThis[fn] !== "function")) {
+  Object.assign(globalThis, {
+    detectName: () => null, sameName: () => false, cleanRosterName: (s) => String(s || "").trim() || null,
+    rosterOthers: (me, list) => [...(list || [])], matchRoster: (n) => n, unusedRoster: (n, list) => [...list],
+    eliminate: () => ({}), nameKey: (s) => String(s || "").toLowerCase(),
+  });
+  console.error("Sparky: names.js missing, voices are not named from introductions or the roster");
 }
 
 const utterances = [];                        // { key, text, t }
 const partials = { me: [], them: [] }; // capture leg -> [{ speaker, text }]
 const speakerOrdinals = {};                   // "int:N" -> 1,2,3… in first-heard order
+const speakerNames = {};                      // "int:N" -> display name, keyed like speakerOrdinals
+const nameSources = {};                       // "int:N" -> "user" (typed) | "auto" (an intro) | "roster" (elimination)
+const declined = new Set();                   // voices whose roster name you cleared: elimination leaves them be
+// Who else is in the call: names the call page shows, and names you typed into
+// the People row. `self` is the page's own label for you.
+const roster = { page: [], self: "", typed: [] };
+let callTabId = null;                         // the tab being transcribed, which the roster is read from
+let rosterTimer = null;
+let rosterRound = 0;                          // bumped whenever reads stop: a read still in flight then is stale
+const ROSTER_EVERY_MS = 15000;
+const ROSTER_KEY = "@roster";                 // the People row's "who is on the call" input
+let liveSessionId = null;                     // the history record this call is written to
 let hub = null;
 let sources = [];                             // [{ stop() }]
 let recording = false;                        // drives the "listening…" placeholder
@@ -87,9 +126,10 @@ function updateDiag() {
 
 // ---- speaker identity ----
 // A capture leg plus Deepgram's speaker index resolve to a stable key. Labels are
-// derived at render time, so a 1:1 call reads "Speaker" and every line upgrades
-// to numbered labels the moment a second voice is heard. speakerLabel/speakerClass
-// live in history.js so a reopened transcript labels itself exactly like the live one.
+// derived at render time, so a 1:1 call reads "Speaker", every line upgrades to
+// numbered labels the moment a second voice is heard, and to a name the moment
+// that voice is named. speakerLabel/speakerClass live in history.js so a reopened
+// transcript labels itself exactly like the live one.
 function speakerKey(leg, speaker) {
   if (leg === "me") return "me";
   return "int:" + (typeof speaker === "number" ? speaker : 0);
@@ -97,8 +137,57 @@ function speakerKey(leg, speaker) {
 function registerSpeaker(key) {
   if (key !== "me" && !(key in speakerOrdinals)) speakerOrdinals[key] = Object.keys(speakerOrdinals).length + 1;
 }
-function labelFor(key) { return speakerLabel(key, speakerOrdinals); }
+function labelFor(key) { return speakerLabel(key, speakerOrdinals, speakerNames); }
 function cls(key) { return speakerClass(key, speakerOrdinals); }
+
+// ---- names ----
+// A voice's name comes, in order of trust, from you (typed), from its own
+// introduction, or from the roster by elimination. An introduction is read once
+// per voice, matched to the roster ("I'm Sarah" -> "Sarah Chen"), and replaces
+// a name elimination gave the same voice. A name typed or introduced that
+// elimination gave another voice is taken back: that voice goes back to
+// automatic. An intro carrying your own name is your voice leaking into the
+// call audio, so it names nobody.
+function isMine(name) { return sameName(name, settings.myName) || sameName(name, roster.self); }
+function reclaim(key, name) {
+  const want = nameKey(matchRoster(name, rosterNow()));
+  for (const k of Object.keys(speakerNames)) {
+    if (k !== key && nameSources[k] === "roster" && nameKey(speakerNames[k]) === want) {
+      delete speakerNames[k];
+      delete nameSources[k];
+    }
+  }
+}
+function autoName(key, text) {
+  if (key === "me") return;
+  if (speakerNames[key] && nameSources[key] !== "roster") return;
+  const said = detectName(text);
+  if (!said || isMine(said)) return;
+  const name = matchRoster(said, rosterNow());
+  reclaim(key, name);
+  speakerNames[key] = name;
+  nameSources[key] = "auto";
+  declined.delete(key);
+}
+
+// The other people in the call: the page's names plus yours typed, minus you
+// (the page's label for you, and Your name).
+function rosterNow() {
+  return rosterOthers(settings.myName, rosterOthers(roster.self, [...roster.page, ...roster.typed]));
+}
+// Elimination: once every other voice but one is accounted for and one name is
+// left, they go together. It never guesses between two (names.js eliminate).
+function applyRoster() {
+  const voices = speakersHeard(utterances, speakerOrdinals).filter((k) => k !== "me");
+  for (const [key, name] of Object.entries(eliminate(voices, speakerNames, rosterNow()))) {
+    if (declined.has(key)) continue;
+    speakerNames[key] = name;
+    nameSources[key] = "roster";
+  }
+}
+function persist() {
+  if (historyReady) recordSession(utterances, speakerOrdinals, speakerNames, nameSources, rosterNow());
+}
 
 // ---- echo guard ----
 // On speakers the mic re-hears the call, and any leak of your voice into the tab
@@ -136,6 +225,7 @@ async function loadSettings() {
   $("model").value = settings.model || "sonnet";
   $("language").value = settings.language || "en";
   $("context").value = settings.context || "";
+  if ($("myName")) $("myName").value = settings.myName || "";
 }
 async function saveSettings() {
   Object.assign(settings, {
@@ -144,14 +234,40 @@ async function saveSettings() {
     model: $("model").value,
     language: $("language").value.trim() || "en",
     context: $("context").value,
+    myName: $("myName") ? $("myName").value.replace(/\s+/g, " ").trim() : settings.myName,
   });
   await chrome.storage.local.set(settings);
+  rosterChanged();                             // Your name is never on the roster
   $("saveMsg").textContent = "Saved.";
   setTimeout(() => ($("saveMsg").textContent = ""), 1500);
 }
 
+// ---- first-run notice ----
+// Shown until it is acknowledged once, then remembered. Raising NOTICE_VERSION
+// shows it to everyone again, which is what to do when what it says changes.
+// 2: it now says the call page's participant names are read.
+const NOTICE_VERSION = 2;
+async function initNotice() {
+  let seen = null;
+  try { seen = (await chrome.storage.local.get("noticeAck")).noticeAck; } catch {}
+  if (seen === NOTICE_VERSION) $("gate").classList.add("hidden");
+  else showNotice();
+}
+function showNotice() {
+  $("ackBox").checked = false;
+  $("ackBtn").disabled = true;
+  $("gate").classList.remove("hidden");
+  if ($("ackBox").focus) $("ackBox").focus();
+}
+async function ackNotice() {
+  $("gate").classList.add("hidden");
+  try { await chrome.storage.local.set({ noticeAck: NOTICE_VERSION }); } catch {}
+}
+function noticeOpen() { return !$("gate").classList.contains("hidden"); }
+
 // ---- transcript ----
 function render() {
+  renderPeople();
   const box = $("transcript");
   if (!utterances.length && !partials.me.length && !partials.them.length) {
     if (recording) {
@@ -166,17 +282,16 @@ function render() {
         `Text appears the moment someone <b>speaks</b>. Voices on the call are ` +
         `separated automatically; your own voice needs the mic.</div>`;
     } else {
-      box.innerHTML = '<div class="muted">Press Start. The call audio is transcribed here, labelled automatically.</div>';
+      box.innerHTML = '<div class="muted">Press Start to transcribe the call. Each voice gets its own label, then a name: from an introduction, or from who the call page shows.</div>';
     }
     return;
   }
-  const rows = utterances.map(
-    (u) => `<div class="line"><span class="${cls(u.key)}">${labelFor(u.key)}:</span> ${escapeHtml(u.text)}</div>`
-  );
+  const rows = utterances.map((u) =>
+    `<div class="line"><span data-key="${escapeHtml(u.key)}" class="${cls(u.key)}">${escapeHtml(labelFor(u.key))}:</span> ${escapeHtml(u.text)}</div>`);
   for (const leg of ["them", "me"]) {
     for (const seg of partials[leg]) {
       if (!seg.text.trim()) continue;
-      rows.push(`<div class="line partial">${labelFor(speakerKey(leg, seg.speaker))}: ${escapeHtml(seg.text)} ▌</div>`);
+      rows.push(`<div class="line partial">${escapeHtml(labelFor(speakerKey(leg, seg.speaker)))}: ${escapeHtml(seg.text)} ▌</div>`);
     }
   }
   box.innerHTML = rows.join("");
@@ -191,9 +306,11 @@ function addFinal(leg, segments) {
     if (isEcho(key, text, now)) continue;
     registerSpeaker(key);
     utterances.push({ key, text, t: now });
+    autoName(key, text);                       // finals only: a partial intro can still change
   }
   partials[leg] = [];
-  if (historyReady) recordSession(utterances, speakerOrdinals);  // finals only — partials are guesses
+  applyRoster();
+  persist();                                   // finals only: partials are guesses
   render();
 }
 function setPartial(leg, segments) {
@@ -202,8 +319,223 @@ function setPartial(leg, segments) {
   render();
 }
 function setLevel(leg, active) {
-  (leg === "me" ? $("lvlMe") : $("lvlThem")).className = "lvldot " + (active ? "on" : "off");
+  const dot = $(leg === "me" ? "lvlMe" : "lvlThem");   // optional, like every element a stale page may lack
+  if (dot) dot.className = "lvldot " + (active ? "on" : "off");
 }
+
+// ---- people ----
+// One chip per voice heard, Me first, then faint chips for roster names no
+// voice has yet. A chip, or a speaker label in a transcript, opens a name input
+// in place of the chip, with the roster as suggestions. `editing.sid` says whose
+// names those are: null for the live call, or a saved session's id. The live
+// row ends in "Add names", for typing who is on the call when the page can't be read.
+let editing = null;                           // { sid, key, draft } while a name input is open
+let peopleShown = "";
+let redrawing = false;                        // true while a redraw replaces the elements, an open input with them
+
+// Chrome blurs a focused input as a redraw removes it, synchronously, while it
+// is still in the page. That blur is the redraw, not you leaving the input.
+function redraw(el, html) {
+  redrawing = true;
+  try { el.innerHTML = html; } finally { redrawing = false; }
+}
+
+const NAME_SOURCE = {
+  user: "Named by you", auto: "Named from their introduction", roster: "Named from who is in the call",
+};
+function peopleHtml(keys, ordinals, names, nameSrc, sid, people) {
+  const open = editing && editing.sid === sid ? editing.key : null;
+  const listId = sid === null ? "rosterLive" : `roster-${sid}`;
+  const suggest = people.length ? ` list="${escapeHtml(listId)}"` : "";
+  const chips = keys.map((key) => {
+    const label = escapeHtml(speakerLabel(key, ordinals, names));
+    const swatch = `<span class="swatch ${speakerClass(key, ordinals)}"></span>`;
+    if (key === "me") return `<span class="person me" title="Your microphone">${swatch}${label}</span>`;
+    const auto = escapeHtml(speakerLabel(key, ordinals, null));
+    if (key === open) {
+      return `<span class="person editing">${swatch}<input class="person-edit" type="text" data-for="${escapeHtml(sid + "|" + key)}" ` +
+        `value="${escapeHtml(names[key] || "")}" placeholder="${auto}" aria-label="Name for ${auto}"${suggest} ` +
+        `maxlength="40" spellcheck="false" autocomplete="off"></span>`;
+    }
+    const how = NAME_SOURCE[nameSrc[key]] || "Not named yet";
+    return `<button class="person" data-act="name" data-key="${escapeHtml(key)}" title="${how}. Click to rename.">${swatch}${label}</button>`;
+  });
+  const far = keys.filter((k) => k !== "me");
+  for (const name of unusedRoster(far.map((k) => names[k]).filter(Boolean), people)) {
+    chips.push(`<span class="person expected" title="In the call, not matched to a voice yet">${escapeHtml(name)}</span>`);
+  }
+  if (sid === null) {
+    chips.push(open === ROSTER_KEY
+      ? `<span class="person editing roster-edit"><input class="person-edit" type="text" data-for="null|${ROSTER_KEY}" ` +
+        `value="${escapeHtml(roster.typed.join(", "))}" placeholder="Sarah Chen, Marcus Lee" ` +
+        `aria-label="Who is on the call, comma separated" spellcheck="false" autocomplete="off"></span>`
+      : `<button class="person add" data-key="${ROSTER_KEY}" title="Type who is on the call, for when the call page cannot be read">+ Add names</button>`);
+  }
+  const hint = open === ROSTER_KEY
+    ? '<div class="people-hint">Names, comma separated. Enter saves, Esc cancels. Names the call page shows are added on their own.</div>'
+    : open ? '<div class="people-hint">Enter saves, Esc cancels. Leave it empty to go back to the automatic label.</div>' : "";
+  const options = people.length
+    ? `<datalist id="${escapeHtml(listId)}">${people.map((n) => `<option value="${escapeHtml(n)}"></option>`).join("")}</datalist>` : "";
+  return `<div class="people-row">${chips.join("")}</div>${hint}${options}`;
+}
+
+// Rewritten only when it changes: render() runs on every partial, and a fresh
+// innerHTML would drop keyboard focus from a chip several times a second. An
+// open input is left alone entirely, along with whatever is typed in it.
+function renderPeople(force) {
+  const box = $("people");
+  if (!box) return;
+  if (!force && editing && editing.sid === null) return;
+  const keys = speakersHeard(utterances, speakerOrdinals);
+  const html = peopleHtml(keys, speakerOrdinals, speakerNames, nameSources, null, rosterNow());
+  if (html === peopleShown && !force) return;
+  peopleShown = html;
+  redraw(box, html);
+}
+
+// What an input opens with: the voice's current name, or the typed roster.
+function draftFor(sid, key) {
+  if (key === ROSTER_KEY) return roster.typed.join(", ");
+  if (sid === null) return speakerNames[key] || "";
+  const s = historySessions.find((x) => x.id === sid);
+  return (s && s.names && s.names[key]) || "";
+}
+// Opening a name while another is open saves the other first, as leaving it would.
+function startNaming(sid, key) {
+  if (!key || key === "me" || (key === ROSTER_KEY && sid !== null)) return;
+  const host = sid === null ? $("people") : $("histList");
+  const find = () => (host && host.querySelector ? host.querySelector(".person-edit") : null);
+  if (editing && editing.sid === sid && editing.key === key) {   // already open: keep what is typed
+    const input = find();
+    if (input) input.focus();
+    return;
+  }
+  if (editing) commitNaming(editing.draft);
+  editing = { sid, key, draft: draftFor(sid, key) };
+  renderPeople(true);
+  if (historyReady) renderHistory();
+  const input = find();
+  if (input) { input.focus(); input.select(); }
+}
+// Keyboard focus goes back to the chip the input stood in for.
+function refocusChip(ed) {
+  const host = ed.sid === null ? $("people") : $("histList");
+  const scope = ed.sid === null ? "" : `.sess[data-id="${ed.sid}"] `;
+  const chip = host && host.querySelector ? host.querySelector(`${scope}button[data-key="${ed.key}"]`) : null;
+  if (chip) chip.focus();
+}
+function cancelNaming() {
+  const was = editing;
+  editing = null;
+  renderPeople(true);
+  if (historyReady && was && was.sid !== null) renderHistory();
+  if (was) refocusChip(was);
+}
+async function commitNaming(typed) {
+  const ed = editing;
+  if (!ed) return;
+  editing = null;
+  if (ed.key === ROSTER_KEY) {
+    roster.typed = rosterOthers("", String(typed || "").split(/[,;\n]/));
+  } else if (ed.sid === null || ed.sid === liveSessionId) {
+    // Clearing a name elimination gave means "not them": do not hand it straight back.
+    const clearing = !String(typed || "").trim();
+    if (clearing && nameSources[ed.key] === "roster") declined.add(ed.key);
+    if (!clearing) { declined.delete(ed.key); reclaim(ed.key, typed); }
+    nameVoice(speakerNames, nameSources, ed.key, typed);
+  }
+  if (ed.sid === null || ed.sid === liveSessionId) {
+    applyRoster();
+    render();
+  }
+  if (historyReady) {
+    if (ed.sid === null) {
+      persist();
+      await flushSession();
+    } else {
+      await renameSpeaker(ed.sid, ed.key, typed);
+    }
+    await refreshHistory();
+  }
+  if (!editing) refocusChip(ed);              // unless another input opened meanwhile
+}
+// Shared by the live People row and the history list. `isOpen` says whether an
+// event comes from the input that is open right now, not one already replaced.
+function isOpen(el) {
+  return Boolean(editing && el && el.classList && el.classList.contains("person-edit")
+    && el.dataset && el.dataset.for === `${editing.sid}|${editing.key}`);
+}
+// True when it handled the key. Enter while an IME is composing picks a
+// character, not the name.
+function onNameKey(e) {
+  if (!e.target || !e.target.classList || !e.target.classList.contains("person-edit")) return false;
+  if (e.key === "Enter") {
+    if (e.isComposing || e.keyCode === 229) return true;
+    e.preventDefault();
+    commitNaming(e.target.value);
+  } else if (e.key === "Escape") { e.preventDefault(); cancelNaming(); }
+  return true;
+}
+function onNameInput(e) { if (isOpen(e.target)) editing.draft = e.target.value; }
+// Clicking or tabbing away saves, as Enter does: an input left open would hold
+// the People row still. A blur from a redraw (see redraw) is not leaving it.
+function onNameBlur(e) {
+  if (redrawing || (e.target && e.target.isConnected === false)) return;
+  if (isOpen(e.target)) commitNaming(e.target.value);
+}
+// While a name is open, pressing on another name keeps focus in the input, so
+// the press is not turned into a blur that redraws the row under the pointer
+// and loses the click. The click then saves this name and opens that one.
+function onNamePress(e) {
+  if (!editing || !e.target || !e.target.closest) return;
+  if (e.target.closest("[data-key]") && !e.target.closest(".person-edit")) e.preventDefault();
+}
+function onPeopleClick(e) {
+  const chip = e.target && e.target.closest && e.target.closest("[data-key]");
+  if (chip) startNaming(null, chip.dataset.key);
+}
+function onTranscriptClick(e) {
+  const label = e.target && e.target.closest && e.target.closest("[data-key]");
+  if (label) startNaming(null, label.dataset.key);
+}
+
+// ---- the roster, read from the call page ----
+// roster.js's readMeetingRoster runs in the call tab, which activeTab allows
+// since Sparky was invoked there. At capture start, then every 15 s while
+// recording. A read that fails or finds nobody changes nothing; names found are
+// added to what was read before, because Meet only keeps the tiles in view in
+// the page and someone who has left was still in this call.
+async function readRoster() {
+  if (callTabId == null || typeof readMeetingRoster !== "function" || !chrome.scripting) return;
+  const round = rosterRound;
+  try {
+    const [res] = await chrome.scripting.executeScript({ target: { tabId: callTabId }, func: readMeetingRoster });
+    // Stop, or Start of the next call, came first: these names belong to a call that is over.
+    if (round !== rosterRound) return;
+    const got = res && res.result;
+    if (!got || !Array.isArray(got.names) || !got.names.length) return;
+    roster.page = rosterOthers("", [...roster.page, ...got.names]);
+    if (got.self) roster.self = String(got.self);
+    rosterChanged();
+  } catch {}
+}
+function rosterChanged() {
+  applyRoster();
+  persist();
+  render();
+}
+function watchRoster(tabId) {
+  unwatchRoster();
+  callTabId = tabId;
+  readRoster();
+  rosterTimer = setInterval(readRoster, ROSTER_EVERY_MS);
+}
+function unwatchRoster() {
+  if (rosterTimer) clearInterval(rosterTimer);
+  rosterTimer = null;
+  rosterRound++;
+}
+
 // ---- what to draft from ----
 // A far-end line that reads as a question: ends in "?" or opens the way a spoken
 // question does. Used to skip backchannels ("Right, yes.") when picking what to
@@ -292,10 +624,11 @@ async function micPermissionState() {
 
 // ---- the call tab ----
 // Chrome lets tabCapture take a tab only after the extension was invoked on it:
-// a click on the Sparky toolbar icon while that tab is in front. Nothing inside
-// this panel counts, and no host permission (<all_urls> included) replaces it.
-// The background reports each icon click, so a recording that is still missing
-// the call picks it up right then, with no Stop and Start.
+// a click on the Sparky toolbar icon, or its shortcut (Alt+Shift+S, from the
+// manifest's _execute_action), while that tab is in front. Nothing inside this
+// panel counts, and no host permission (<all_urls> included) replaces it. The
+// background reports each invocation, so a recording that is still missing the
+// call picks it up right then, with no Stop and Start.
 
 // The meeting tab -> the far end, diarized into separate voices.
 async function attachTab(tabId) {
@@ -307,14 +640,15 @@ async function attachTab(tabId) {
   attach("them", tab, { playback: true, diarize: true });  // playback so you still hear the call
   tabAttached = true;
   if (historyReady) noteSessionSource(resp.tabTitle);
+  if (resp.tabId != null) watchRoster(resp.tabId);
   status("Capturing: " + (resp.tabTitle || "active tab"));
 }
 function onTabCaptureFailed(e) {
   const msg = String(e.message || e);
   if (/not been invoked|activeTab/i.test(msg)) {
-    status("Chrome will not let Sparky hear this tab yet. Go to the call tab and click the "
-      + "Sparky icon in the toolbar (under the puzzle piece if it is not pinned). The call "
-      + "joins this recording by itself, no restart needed.", true);
+    status("Chrome will not let Sparky hear this tab yet. On the call tab, click the Sparky "
+      + "icon in the toolbar (under the puzzle piece if it is not pinned), or press Alt+Shift+S. "
+      + "The call joins this recording by itself, no restart needed.", true);
   } else {
     status("Tab capture failed: " + msg, true);
   }
@@ -360,12 +694,19 @@ async function start() {
     setState("stopped");
     return status("Audio init failed: " + e.message, true);
   }
-  // A new capture session is a new speaker-index space — carrying the old map over
-  // would silently pin a fresh voice to the previous call's label.
+  // A new capture session is a new speaker-index space: carrying the old maps over
+  // would silently pin a fresh voice to the previous call's label or name.
+  // Names typed before a call are for that call; names typed during the last one are not.
+  if (utterances.length) roster.typed = [];
   utterances.length = 0;
   partials.me = []; partials.them = [];
-  for (const k of Object.keys(speakerOrdinals)) delete speakerOrdinals[k];
-  if (historyReady) beginSession({});        // the tab title arrives below, once capture starts
+  for (const map of [speakerOrdinals, speakerNames, nameSources]) for (const k of Object.keys(map)) delete map[k];
+  declined.clear();
+  roster.page = []; roster.self = "";
+  unwatchRoster();
+  callTabId = null;
+  editing = null;
+  liveSessionId = historyReady ? beginSession({}).id : null;   // the tab title arrives below, once capture starts
   micAttached = false;
   tabAttached = false;
   frames.me = 0; frames.them = 0;
@@ -385,9 +726,10 @@ async function start() {
   }
 }
 
-// Teardown is synchronous — the audio must stop the instant you click. Sealing the
+// Teardown is synchronous: the audio must stop the instant you click. Sealing the
 // transcript happens after, and the optional Claude retitle after that.
 async function stop() {
+  unwatchRoster();
   sources.forEach((s) => { try { s.stop(); } catch {} });
   sources = [];
   try { hub && hub.close(); } catch {}
@@ -399,7 +741,7 @@ async function stop() {
 
   if (!historyReady) return status(HISTORY_BROKEN, true);
   const saved = await endSession();
-  if (!saved) return;                      // nobody spoke — nothing worth keeping
+  if (!saved) return;                      // nobody spoke, nothing worth keeping
   await refreshHistory();
   status("Saved to history: " + saved.title);
   const better = await autoTitleSession(saved.id, settings.anthropicKey, API_MODEL_IDS.haiku);
@@ -426,13 +768,17 @@ async function refreshHistory() {
 function sessionCard(s) {
   const open = expanded.has(s.id);
   const head = renamingId === s.id
-    ? `<input class="sess-rename" value="${escapeHtml(s.title)}" placeholder="Name this call">`
-    : `<button class="sess-title" data-act="toggle">${open ? "▾" : "▸"} ${sessionTitleHtml(s)}</button>`;
+    ? `<input class="sess-rename" value="${escapeHtml(s.title)}" placeholder="Name this call" aria-label="Call title">`
+    : `<button class="sess-title" data-act="toggle" aria-expanded="${open}"><span class="caret"></span>${sessionTitleHtml(s)}</button>`;
+  const names = s.names || {};
   const body = open
-    ? `<div class="sess-body">${sessionLines(s)
-        .map((l) => `<div class="line"><span class="${l.cls}">${l.label}:</span> ${l.html}</div>`).join("")}</div>`
+    ? `<div class="sess-body">${peopleHtml(speakersHeard(s.lines, s.ordinals), s.ordinals, names, s.nameSources || {}, s.id, s.roster || [])}` +
+      sessionLines(s).map((l) => {
+        const act = l.key === "me" ? "" : ` data-act="name"`;
+        return `<div class="line"><span${act} data-key="${escapeHtml(l.key)}" class="${l.cls}">${escapeHtml(l.label)}:</span> ${l.html}</div>`;
+      }).join("") + `</div>`
     : "";
-  return `<div class="sess" data-id="${s.id}">${head}
+  return `<div class="sess" data-id="${escapeHtml(s.id)}">${head}
     <div class="sess-meta">${escapeHtml(sessionMeta(s))}</div>
     <div class="sess-btns">
       <button class="chip" data-act="copy">Copy</button>
@@ -442,12 +788,20 @@ function sessionCard(s) {
     </div>${body}</div>`;
 }
 function renderHistory() {
+  // A name half typed into a saved call survives a re-render: a retitle can land
+  // a few seconds after Stop, right while you are naming someone.
+  const list = $("histList");
+  const typing = editing && editing.sid !== null && list.querySelector ? list.querySelector(".person-edit") : null;
+  const keep = typing && typing.dataset.for === `${editing.sid}|${editing.key}`
+    ? { value: typing.value, focused: document.activeElement === typing } : null;
   $("histCount").textContent = historySessions.length ? ` (${historySessions.length})` : "";
   $("histClear").textContent = armedId === "all" ? "Delete every transcript, sure?" : "Clear all";
   $("histClear").className = "chip danger" + (historySessions.length ? "" : " hidden");
-  $("histList").innerHTML = historySessions.length
+  redraw(list, historySessions.length
     ? historySessions.map(sessionCard).join("")
-    : '<div class="muted">Nothing saved yet. Every call you Start is kept here automatically.</div>';
+    : '<div class="muted">Nothing saved yet. Every call you Start is kept here automatically.</div>');
+  const input = keep && list.querySelector(".person-edit");
+  if (input) { input.value = keep.value; if (keep.focused) input.focus(); }
 }
 
 // Side panels can lose document focus, which makes the async clipboard reject.
@@ -476,10 +830,13 @@ async function onHistoryClick(e) {
   if (!s) return;
   if (act !== "delete") armedId = null;
   if (act !== "rename") renamingId = null;
+  if (act !== "name" && editing && editing.sid !== null) editing = null;
 
   if (act === "toggle") {
     expanded.has(s.id) ? expanded.delete(s.id) : expanded.add(s.id);
     renderHistory();
+  } else if (act === "name") {
+    startNaming(s.id, btn.dataset.key);
   } else if (act === "copy") {
     status((await copyText(sessionText(s))) ? "Transcript copied." : "Copy failed. Expand it and select the text.");
     renderHistory();
@@ -504,6 +861,7 @@ async function onHistoryClick(e) {
   }
 }
 async function onHistoryKey(e) {
+  if (onNameKey(e)) return;
   if (!e.target.classList || !e.target.classList.contains("sess-rename")) return;
   if (e.key === "Enter") {
     const id = renamingId;
@@ -528,8 +886,12 @@ async function onClearHistory() {
 // in points mode (empty before the conversation starts).
 function buildUserPrompt(anchor, note, mode) {
   const points = mode === "points";
+  const me = (settings.myName || "").trim();
+  const people = rosterNow();
   const parts = [
     `=== MY CONTEXT ===\n${(settings.context || "(none)").trim()}`,
+    ...(me ? [`=== WHO I AM ===\nMy name is ${me}. Lines labelled "Me" are mine.`] : []),
+    ...(people.length ? [`PEOPLE IN THIS MEETING: ${people.join(", ")}`] : []),
     `=== CONVERSATION SO FAR ===\n${transcriptText() || "(nothing yet)"}`,
     points
       ? `=== LAST THING SAID (continue from here) ===\n${anchor || "(the conversation has not started yet: give me points to open with)"}`
@@ -621,23 +983,25 @@ async function copyDraft() {
 }
 
 // h drafts without leaving the call to click, as in the terminal app. Keys
-// typed into the note, the context box or a settings field are left alone.
+// typed into the note, the context box or a settings field are left alone, and
+// so is everything while the first-run notice is up.
 function onShortcut(e) {
   if (e.ctrlKey || e.metaKey || e.altKey) return;
   const tag = ((e.target && e.target.tagName) || "").toLowerCase();
   if (tag === "input" || tag === "textarea" || tag === "select" || (e.target && e.target.isContentEditable)) return;
+  if (noticeOpen()) return;
   if (e.key === "h") { e.preventDefault(); help(); }
 }
 
 function status(msg, isErr) {
   const el = $("status");
   el.textContent = msg;
-  el.style.color = isErr ? "var(--red)" : "var(--muted)";
+  el.classList.toggle("err", !!isErr);
 }
 
 // The side panel can't raise the mic prompt, so mic.html does it in a real tab.
-// Once the grant exists we bind to the LIVE hub — demanding a Stop → Start round
-// trip was the dead end that left the "you" leg at 0 frames.
+// Once the grant exists we bind to the LIVE hub: demanding a Stop and Start
+// round trip was the dead end that left the "you" leg at 0 frames.
 async function onMicBtn() {
   if (recording && hub && !micAttached && (await micPermissionState()) === "granted") {
     if (await attachMic()) {
@@ -651,21 +1015,40 @@ async function onMicBtn() {
 }
 
 // ---- wire up ----
-$("ackBox").addEventListener("change", (e) => ($("ackBtn").disabled = !e.target.checked));
-$("ackBtn").addEventListener("click", () => $("gate").classList.add("hidden"));
-$("startBtn").addEventListener("click", start);
-$("stopBtn").addEventListener("click", stop);
-$("helpBtn").addEventListener("click", () => help());
-$("copyBtn").addEventListener("click", copyDraft);
+// Elements added after 0.4 are optional, for the same reason as HISTORY_API: a
+// panel kept open across an update runs the new script against the old page.
+function on(id, type, fn) { const el = $(id); if (el) el.addEventListener(type, fn); }
+on("ackBox", "change", (e) => ($("ackBtn").disabled = !e.target.checked));
+on("ackBtn", "click", ackNotice);
+on("noticeShow", "click", showNotice);
+on("startBtn", "click", start);
+on("stopBtn", "click", stop);
+on("helpBtn", "click", () => help());
+on("copyBtn", "click", copyDraft);
 document.addEventListener("keydown", onShortcut);
-$("micBtn").addEventListener("click", onMicBtn);
-$("saveBtn").addEventListener("click", saveSettings);
-$("context").addEventListener("change", saveSettings);
-$("histList").addEventListener("click", onHistoryClick);
-$("histList").addEventListener("keydown", onHistoryKey);
-$("histClear").addEventListener("click", onClearHistory);
-$("histBox").addEventListener("toggle", () => { if ($("histBox").open) refreshHistory(); });
+on("micBtn", "click", onMicBtn);
+on("saveBtn", "click", saveSettings);
+on("context", "change", saveSettings);
+on("myName", "change", saveSettings);
+on("people", "click", onPeopleClick);
+on("people", "keydown", onNameKey);
+on("transcript", "click", onTranscriptClick);
+on("histList", "click", onHistoryClick);
+on("histList", "keydown", onHistoryKey);
+for (const id of ["people", "histList"]) {
+  on(id, "input", onNameInput);
+  on(id, "focusout", onNameBlur);
+}
+for (const id of ["people", "transcript", "histList"]) on(id, "mousedown", onNamePress);
+on("histClear", "click", onClearHistory);
+on("histBox", "toggle", () => { if ($("histBox").open) refreshHistory(); });
 
+// The well gives up height when a draft lands above it; keep its newest line in view.
+if (typeof ResizeObserver === "function") {
+  new ResizeObserver(() => { const box = $("transcript"); box.scrollTop = box.scrollHeight; }).observe($("transcript"));
+}
+
+initNotice();
 loadSettings();
 setState("idle");
 refreshHistory();

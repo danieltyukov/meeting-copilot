@@ -1,92 +1,109 @@
 <!doctype html>
-<html>
+<html lang="en">
 <head>
   <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Sparky</title>
   <link rel="stylesheet" href="sidepanel.css">
 </head>
-<body>
-  <!-- Consent / disclosure gate -->
-  <div id="gate" class="gate">
+<body class="panel">
+  <!-- First-run notice. Hidden until sidepanel.js finds it has not been acknowledged yet. -->
+  <div id="gate" class="gate hidden" role="dialog" aria-modal="true" aria-labelledby="gateTitle">
     <div class="gate-card">
-      <h2><img src="icons/icon48.png" alt="" width="20" height="20" style="vertical-align:-4px;border-radius:5px"> Sparky</h2>
-      <p>This transcribes the <b>active meeting tab's audio</b> and drafts first-person answers and talking points.</p>
+      <img class="gate-icon" src="icons/icon128.png" alt="" width="44" height="44">
+      <h1 id="gateTitle">Welcome to Sparky</h1>
+      <p>Sparky transcribes the <b>call in the active tab</b> and drafts what you could say next: an answer when you are asked something, talking points otherwise.</p>
       <ul>
         <li>Only use it where you have <b>consent to transcribe</b> the call.</li>
         <li>It is a <b>visible</b> aid: it is <b>not</b> hidden from screen sharing. Disclose it where required.</li>
         <li>Audio is sent to Deepgram; prompts go to the Anthropic API (your keys).</li>
+        <li>It reads the participant names the call page shows, to label voices. Nothing else on the page is read.</li>
       </ul>
       <label class="ack"><input type="checkbox" id="ackBox"> I understand and have consent to use this.</label>
-      <button id="ackBtn" disabled>Continue</button>
+      <button id="ackBtn" class="primary" disabled>Continue</button>
+      <p class="gate-foot">Shown once. Settings can bring it back.</p>
     </div>
   </div>
 
-  <header>
-    <div class="row">
-      <span id="dot" class="dot idle"></span>
-      <span id="state">idle</span>
-      <span class="grow"></span>
-      <span class="lvl"><span id="lvlMe" class="lvldot off"></span>you</span>
-      <span class="lvl"><span id="lvlThem" class="lvldot off"></span>them</span>
-    </div>
+  <header class="top">
+    <div class="brand"><img src="icons/icon48.png" alt="" width="22" height="22"><span class="wordmark">Sparky</span></div>
+    <span class="pill" role="status"><span id="dot" class="dot idle"></span><span id="state">idle</span></span>
+    <span class="grow"></span>
+    <span class="lvl" title="Your microphone"><span id="lvlMe" class="lvldot off"></span>you</span>
+    <span class="lvl" title="The call tab"><span id="lvlThem" class="lvldot off"></span>them</span>
   </header>
 
   <main>
     <!-- Draft box first: what you read aloud sits ABOVE the transcript. -->
-    <section class="pane answer">
-      <div class="pane-title"><span>Read this aloud</span><button id="copyBtn" class="chip hidden" title="Copy the draft">Copy</button></div>
-      <div id="answer" class="answer"><div class="muted">Press <b>Help</b> (or <b>h</b>) whenever you need something to say. If you were just asked something you get a first-person answer; otherwise, talking points to keep the conversation going. Both are grounded in your context.</div></div>
-    </section>
-
-    <section class="pane">
-      <div class="pane-title">Live transcript</div>
-      <div id="transcript" class="transcript"><div class="muted">Press Start. The call audio is transcribed here, labelled automatically.</div></div>
-    </section>
-
-    <section class="controls">
-      <input id="note" type="text" placeholder="optional: steer the next draft (e.g. 'keep it to 2 sentences', 'bring up the migration')">
-      <div class="btns">
-        <button id="startBtn">Start</button>
-        <button id="stopBtn" disabled>Stop</button>
-        <button id="helpBtn" class="primary" title="Draft what to say next (h)">Help</button>
+    <section class="draft" aria-labelledby="draftTitle">
+      <div class="sec-head">
+        <h2 id="draftTitle" class="sec-title">Read this aloud</h2>
+        <button id="copyBtn" class="chip hidden" title="Copy the draft">Copy</button>
       </div>
-      <button id="micBtn" class="hidden">Fix microphone access</button>
+      <div id="answer" class="answer"><div class="muted">Press <b>Help</b> (or <kbd>h</kbd>) whenever you need something to say. If you were just asked something you get a first-person answer; otherwise, talking points to keep the conversation going. Both are grounded in your context.</div></div>
     </section>
 
-    <details class="hist" id="histBox">
-      <summary>History<span id="histCount"></span>: saved transcripts</summary>
-      <div id="histList" class="histlist"></div>
-      <button id="histClear" class="chip danger hidden">Clear all</button>
-    </details>
+    <!-- People heads the transcript: one chip per voice, the legend for the lines below. -->
+    <section class="talk" aria-labelledby="talkTitle">
+      <h2 id="talkTitle" class="sec-title">Transcript</h2>
+      <div class="well">
+        <div id="people" class="people" role="group" aria-label="People"></div>
+        <div id="transcript" class="transcript"><div class="muted">Press Start to transcribe the call.</div></div>
+      </div>
+    </section>
 
-    <details class="ctx">
-      <summary>Your context (pasted): grounds every draft</summary>
-      <textarea id="context" rows="5" placeholder="Paste anything useful: your CV, the project or repo summary, the job description, what you want to bring up..."></textarea>
-    </details>
+    <div class="folds">
+      <details class="fold" id="histBox">
+        <summary><span class="fold-name">History<span id="histCount"></span></span><span class="fold-hint">saved transcripts</span></summary>
+        <div id="histList" class="histlist"></div>
+        <button id="histClear" class="chip danger hidden">Clear all</button>
+      </details>
 
-    <details class="settings">
-      <summary>Settings</summary>
-      <label>Deepgram API key <input id="deepgramKey" type="password" placeholder="dg_..."></label>
-      <label>Anthropic API key <input id="anthropicKey" type="password" placeholder="sk-ant-..."></label>
-      <label>Answer model
-        <select id="model">
-          <option value="haiku">haiku (fastest)</option>
-          <option value="sonnet" selected>sonnet</option>
-          <option value="opus">opus (best)</option>
-        </select>
-      </label>
-      <label>Language <input id="language" type="text" value="en" size="6"></label>
-      <button id="saveBtn">Save settings</button>
-      <div id="saveMsg" class="muted"></div>
-    </details>
+      <details class="fold">
+        <summary><span class="fold-name">Your context</span><span class="fold-hint">grounds every draft</span></summary>
+        <textarea id="context" rows="6" aria-label="Your context" placeholder="Paste anything useful: your CV, the project or repo summary, the job description, what you want to bring up..."></textarea>
+      </details>
+
+      <details class="fold settings">
+        <summary><span class="fold-name">Settings</span><span class="fold-hint">keys, model, your name</span></summary>
+        <label>Your name <span class="opt">optional</span>
+          <input id="myName" type="text" autocomplete="name" spellcheck="false" placeholder="e.g. Daniel">
+        </label>
+        <p class="field-note">Drafts use it, and an introduction with your name heard in the call audio is ignored.</p>
+        <label>Deepgram API key <input id="deepgramKey" type="password" placeholder="dg_..."></label>
+        <label>Anthropic API key <input id="anthropicKey" type="password" placeholder="sk-ant-..."></label>
+        <div class="pair">
+          <label>Answer model
+            <select id="model">
+              <option value="haiku">haiku (fastest)</option>
+              <option value="sonnet" selected>sonnet</option>
+              <option value="opus">opus (best)</option>
+            </select>
+          </label>
+          <label>Language <input id="language" type="text" value="en" size="6"></label>
+        </div>
+        <div class="save-row"><button id="saveBtn">Save settings</button><span id="saveMsg" class="muted"></span></div>
+        <button id="noticeShow" class="link">Show the welcome notice again</button>
+      </details>
+    </div>
   </main>
 
-  <footer>
-    <div id="status" class="muted">Visible aid · not hidden from screen share · use with consent.</div>
+  <footer class="dock">
+    <input id="note" type="text" aria-label="Steer the next draft" placeholder="Steer the next draft, e.g. 'keep it short'">
+    <div class="btns">
+      <button id="startBtn" class="rec">Start</button>
+      <button id="stopBtn" class="halt" disabled>Stop</button>
+      <button id="helpBtn" class="primary" title="Draft what to say next (h)">Help <kbd>h</kbd></button>
+    </div>
+    <button id="micBtn" class="warn hidden">Fix microphone access</button>
+    <div id="status" class="status">Visible aid, not hidden from screen sharing. Use with consent.</div>
     <div id="diag" class="diag"></div>
   </footer>
 
   <script src="audio.js"></script>
   <script src="deepgram.js"></script>
+  <script src="names.js"></script>
+  <script src="roster.js"></script>
   <script src="history.js"></script>
   <script src="sidepanel.js"></script>
 </body>

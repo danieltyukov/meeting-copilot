@@ -34,7 +34,8 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
           : await chrome.tabs.query({ active: true, lastFocusedWindow: true });
         if (!tab) throw new Error("No active meeting tab found — focus the Meet/Teams tab.");
         const streamId = await getStreamId(tab.id);
-        sendResponse({ ok: true, streamId, tabTitle: tab.title });
+        // tabId: the panel reads who is in the call from this same tab.
+        sendResponse({ ok: true, streamId, tabTitle: tab.title, tabId: tab.id });
       }
     } catch (e) {
       sendResponse({ ok: false, error: String(e?.message || e) });

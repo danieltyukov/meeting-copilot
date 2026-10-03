@@ -1,12 +1,13 @@
 // Transcript history. The side panel is an ordinary page that Chrome may tear
 // down at any moment, so a call is written to chrome.storage.local WHILE it
-// happens (throttled) rather than at Stop — forgetting to press Stop, or closing
+// happens (throttled) rather than at Stop: forgetting to press Stop, or closing
 // the panel mid-call, must not cost you the transcript.
 //
-// A record stores the raw speaker KEY per line plus a snapshot of the ordinal
-// map, never the rendered label: labels upgrade retroactively ("Speaker"
-// becomes "Speaker 1" the moment a second voice is heard), so freezing them
-// at write time would bake in whatever was true halfway through the call.
+// A record stores the raw speaker KEY per line plus snapshots of the ordinal
+// map and the names map, never the rendered label: labels upgrade
+// retroactively ("Speaker" becomes "Speaker 1" the moment a second voice is
+// heard, and "Sarah" the moment she introduces herself), so freezing them at
+// write time would bake in whatever was true halfway through the call.
 //
 // Loaded before sidepanel.js, which shares this file's speakerLabel/speakerClass
 // so the live view and the history view can't drift apart.
@@ -37,8 +38,11 @@ function escapeHtml(s) {
 }
 
 // ---- labels (shared with the live transcript) ----
-function speakerLabel(key, ordinals) {
+// `names` is optional: records saved before speakers had names carry none, and
+// an unnamed voice keeps the numbered label exactly as before.
+function speakerLabel(key, ordinals, names) {
   if (key === "me") return "Me";
+  if (names && names[key]) return names[key];
   const o = ordinals || {};
   if (Object.keys(o).length <= 1) return "Speaker";
   return "Speaker " + (o[key] || Object.keys(o).length);
@@ -47,6 +51,24 @@ function speakerClass(key, ordinals) {
   if (key === "me") return "spk-Me";
   const n = (ordinals && ordinals[key]) || 1;
   return SPK_CLASSES[(n - 1) % SPK_CLASSES.length];
+}
+
+// Every voice with at least one line, Me first, then the far end in
+// first-heard order. A voice only ever seen in a partial is not listed.
+function speakersHeard(lines, ordinals) {
+  const o = ordinals || {};
+  const spoke = new Set((lines || []).map((l) => l.key));
+  const far = Object.keys(o).filter((k) => spoke.has(k)).sort((a, b) => o[a] - o[b]);
+  return spoke.has("me") ? ["me", ...far] : far;
+}
+
+// A name typed by hand. It always wins and detection never replaces it; an
+// empty one hands the voice back to automatic naming. "Me" is never renamed.
+function nameVoice(names, sources, key, typed) {
+  if (key === "me") return;
+  const clean = String(typed || "").replace(/\s+/g, " ").trim().slice(0, 40);
+  if (clean) { names[key] = clean; sources[key] = "user"; }
+  else { delete names[key]; delete sources[key]; }
 }
 
 // ---- storage ----
@@ -84,7 +106,7 @@ function beginSession(opts) {
   current = {
     id: "s" + startedAt + "-" + Math.random().toString(36).slice(2, 7),
     startedAt, endedAt: null, title: "", titleSource: "heuristic",
-    tabTitle: (opts && opts.tabTitle) || "", ordinals: {}, lines: [],
+    tabTitle: (opts && opts.tabTitle) || "", ordinals: {}, names: {}, nameSources: {}, roster: [], lines: [],
   };
   return current;
 }
@@ -97,10 +119,15 @@ function noteSessionSource(tabTitle) {
 
 // The whole transcript is re-sent on every call; it is a few KB of text, and
 // diffing it would buy nothing but a chance to persist a wrong line.
-function recordSession(lines, ordinals) {
+// `nameSources` says, per named voice, "user" (typed), "auto" (from an
+// introduction) or "roster" (by elimination); `roster` is who else was in the call.
+function recordSession(lines, ordinals, names, nameSources, roster) {
   if (!current) return;
   current.lines = lines.map((u) => ({ key: u.key, text: u.text, t: u.t }));
   current.ordinals = Object.assign({}, ordinals);
+  current.names = Object.assign({}, names);
+  current.nameSources = Object.assign({}, nameSources);
+  current.roster = [...(roster || [])];
   if (flushTimer) return;                       // a write is already due
   flushTimer = setTimeout(() => { flushTimer = null; flushSession(); }, historyLimits.flushMs);
 }
@@ -119,7 +146,7 @@ function flushSession() {
 }
 
 // Seals the call: stamps the end, names it, writes it. Returns null for a
-// session nobody spoke in — a stray Start/Stop shouldn't litter the list.
+// session nobody spoke in, since a stray Start/Stop shouldn't litter the list.
 // `current` stays put so a final that lands after Stop still joins this record.
 async function endSession(opts) {
   if (!current) return null;
@@ -140,6 +167,24 @@ function renameSession(id, title, source) {
     s.title = clean;
     s.titleSource = source || "user";
     if (current && current.id === id) { current.title = clean; current.titleSource = s.titleSource; }
+    await writeSessions(all);
+    return s;
+  });
+}
+
+// Names a voice in a saved call, as typed in its People row.
+function renameSpeaker(id, key, typed) {
+  return enqueue(async () => {
+    const all = await readSessions();
+    const s = all.find((x) => x.id === id);
+    if (!s) return null;
+    s.names = s.names || {};
+    s.nameSources = s.nameSources || {};
+    nameVoice(s.names, s.nameSources, key, typed);
+    if (current && current.id === id) {
+      current.names = Object.assign({}, s.names);
+      current.nameSources = Object.assign({}, s.nameSources);
+    }
     await writeSessions(all);
     return s;
   });
@@ -216,13 +261,24 @@ async function autoTitleSession(id, apiKey, model) {
 function sessionLines(s) {
   return (s.lines || []).map((l) => ({
     key: l.key, text: l.text, t: l.t,
-    label: speakerLabel(l.key, s.ordinals),
+    label: speakerLabel(l.key, s.ordinals, s.names),
     cls: speakerClass(l.key, s.ordinals),
     html: escapeHtml(l.text),
   }));
 }
 function sessionTitleHtml(s) { return escapeHtml(s.title || "Untitled session"); }
 function sessionVoices(s) { return Object.keys(s.ordinals || {}).length; }
+// Me, every far-end voice heard, and anyone on the roster no voice was named
+// for (they were in the call, whether or not they spoke). Uses names.js's
+// roster matching when it is loaded, so "Sarah" accounts for "Sarah Chen".
+function sessionPeople(s) {
+  const far = speakersHeard(s.lines, s.ordinals).filter((k) => k !== "me");
+  const named = far.map((k) => (s.names || {})[k]).filter(Boolean);
+  const roster = s.roster || [];
+  const left = typeof unusedRoster === "function" ? unusedRoster(named, roster)
+    : roster.filter((r) => !named.some((n) => n.toLowerCase() === r.toLowerCase()));
+  return ["Me", ...far.map((k) => speakerLabel(k, s.ordinals, s.names)), ...left];
+}
 function sessionTranscript(s) { return sessionLines(s).map((l) => l.label + ": " + l.text).join("\n"); }
 
 function pad2(n) { return (n < 10 ? "0" : "") + n; }
@@ -257,6 +313,7 @@ function sessionMarkdown(s) {
     "- Date: " + formatWhen(s.startedAt),
     "- Duration: " + formatDuration((s.endedAt || s.startedAt) - s.startedAt),
     "- Source: " + (s.tabTitle || "unknown"),
+    "- People: " + sessionPeople(s).join(", "),
     "- Voices: " + sessionVoices(s),
     "",
   ].join("\n");
