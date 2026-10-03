@@ -14,6 +14,10 @@ from datetime import datetime
 from enum import Enum
 from pathlib import Path
 
+from .names import detect_name, same_name
+from .roster import eliminate as eliminate_by_roster
+from .roster import match_roster, name_key, roster_others, unused_roster
+
 # A far-end line that reads as a question: it ends in "?" or opens the way a
 # spoken question does. Used to skip backchannels ("Right, yes.") when picking
 # what to answer.
@@ -36,7 +40,7 @@ class State(Enum):
 @dataclass
 class Utterance:
     t: float  # seconds since meeting start
-    speaker: str  # raw cluster label: "A", "B" or "?"
+    speaker: str  # raw cluster label: "A", "B", ... or "?"
     text: str
 
 
@@ -53,14 +57,35 @@ def fmt_clock(seconds: float) -> str:
     return f"{seconds // 60:02d}:{seconds % 60:02d}"
 
 
-class Session:
-    """Owns the conversation: state, utterances, and who 'me' is."""
+def display_name(label: str, me_label: str | None, names: dict[str, str]) -> str:
+    """How a voice is labelled: Me, its name when known, else ``Speaker X``.
+    Shared by the session and the TUI so both resolve labels the same way."""
+    if label == "?":
+        return "Speaker ?"
+    if label == me_label:
+        return "Me"
+    # Everyone who isn't me keeps their own letter until they are named, so a
+    # meeting with several other voices stays legible instead of collapsing.
+    return names.get(label) or f"Speaker {label}"
 
-    def __init__(self) -> None:
+
+class Session:
+    """Owns the conversation: state, utterances, who 'me' is and who the others are."""
+
+    def __init__(self, my_name: str | None = None) -> None:
         self.state = State.IDLE
         self.utterances: list[Utterance] = []
         self.assists: list[Assist] = []
-        self.me_label: str | None = None  # which cluster label ("A"/"B") is me
+        self.me_label: str | None = None  # which cluster label ("A", "B", ...) is me
+        self.my_name = (my_name or "").strip() or None
+        self.names: dict[str, str] = {}         # label -> name
+        # label -> where the name came from, strongest first: "user" (typed),
+        # "intro" (they said it), "roster" (the one name left over)
+        self.name_sources: dict[str, str] = {}
+        self.roster: list[str] = []   # the other people in the meeting (invite, --people)
+        # Voices whose eliminated name I cleared: elimination leaves them alone,
+        # so a wrong guess does not snap straight back.
+        self.declined: set[str] = set()
         self.started_wall: datetime | None = None
         self.ended_wall: datetime | None = None
 
@@ -73,6 +98,12 @@ class Session:
         self.state = State.RECORDING
         self.utterances = []
         self.assists = []
+        # Cluster labels restart with every stream (a new diarizer or Deepgram
+        # connection), so neither names nor which letter is me carry over.
+        self.me_label = None
+        self.names = {}
+        self.name_sources = {}
+        self.declined = set()
         self.started_wall = now or datetime.now()
         self.ended_wall = None
 
@@ -98,13 +129,115 @@ class Session:
         self.me_label = label
 
     def speaker_name(self, label: str) -> str:
+        return display_name(label, self.me_label, self.names)
+
+    def heard_labels(self) -> list[str]:
+        """Every voice that has said something final, first heard first ("?" aside)."""
+        seen: list[str] = []
+        for utt in self.utterances:
+            if utt.speaker != "?" and utt.speaker not in seen:
+                seen.append(utt.speaker)
+        return seen
+
+    def observe_name(self, utt: Utterance) -> list[tuple[str, str]]:
+        """Name voices from a final line: its speaker's introduction, then
+        elimination against the roster. Returns what changed as ``(label,
+        source)`` pairs, source being "intro", "me" or "roster".
+
+        An intro names a voice that has no name yet or only a roster one; a
+        typed name or an earlier intro is never replaced. The name is matched
+        to the roster ("Sarah" becomes "Sarah Chen"). When it is my name and
+        nobody is marked as me yet, that voice is me instead.
+        """
+        changes: list[tuple[str, str]] = []
+        label = utt.speaker
+        if (label != "?" and label != self.me_label
+                and self.name_sources.get(label) not in ("user", "intro")):
+            name = detect_name(utt.text)
+            if name and self.my_name and same_name(name, self.my_name):
+                # My name from a second voice is my own voice split in two: ignore it.
+                if self.me_label is None:
+                    self.me_label = label
+                    if self.name_sources.get(label) == "roster":
+                        self._unname(label)
+                    changes.append((label, "me"))
+            elif name:
+                self._claim(label, match_roster(name, self.roster), "intro")
+                changes.append((label, "intro"))
+        return changes + self.eliminate()
+
+    def eliminate(self) -> list[tuple[str, str]]:
+        """Give the one unnamed voice the one roster name left, when that is
+        certain. Needs me marked: the room mic hears me too, so until then a
+        voice cannot be counted as one of the others."""
+        if self.me_label is None or not self.roster:
+            return []
+        voices = [v for v in self.heard_labels() if v != self.me_label]
+        found = eliminate_by_roster(voices, {v: self.names[v] for v in voices if v in self.names},
+                                    self.roster)
+        found = {label: name for label, name in found.items() if label not in self.declined}
+        for label, name in found.items():
+            self.names[label] = name
+            self.name_sources[label] = "roster"
+        return [(label, "roster") for label in found]
+
+    def set_roster(self, names) -> list[tuple[str, str]]:
+        """The people in the meeting, from the invite or --people. I am left
+        out by name. Returns any voice that elimination names right away."""
+        self.roster = roster_others(self.my_name, names)
+        return self.eliminate()
+
+    def rename(self, label: str, name: str) -> bool:
+        """Name a voice by hand. A typed name always wins over detection; an
+        empty one returns the voice to automatic (a later intro can name it).
+        Returns whether anything changed."""
+        name = " ".join(name.split())
         if label == "?":
-            return "Speaker ?"
-        if label == self.me_label:
-            return "Me"
-        # Everyone who isn't me keeps their own letter, so a meeting with several
-        # other voices stays legible instead of collapsing into one name.
-        return f"Speaker {label}"
+            return False
+        if not name:
+            if label not in self.names:
+                return False
+            if self.name_sources.get(label) == "roster":
+                self.declined.add(label)
+            self._unname(label)
+            return True
+        if self.names.get(label) == name and self.name_sources.get(label) == "user":
+            return False
+        # The same name as a guess or an intro still counts: typing it confirms it.
+        self._claim(label, name, "user")
+        return True
+
+    def _claim(self, label: str, name: str, source: str) -> None:
+        """Name a voice. Another voice that holds the same person only by
+        elimination was a guess that is now wrong, so it goes back to automatic."""
+        key = name_key(match_roster(name, self.roster))
+        for other in [v for v, s in self.name_sources.items() if s == "roster" and v != label]:
+            if name_key(self.names[other]) == key:
+                self._unname(other)
+        self.names[label] = name
+        self.name_sources[label] = source
+        # A name from me or from the voice settles what clearing a guess was about.
+        self.declined.discard(label)
+
+    def _unname(self, label: str) -> None:
+        self.names.pop(label, None)
+        self.name_sources.pop(label, None)
+
+    def unplaced_roster(self) -> list[str]:
+        """Roster names no voice other than mine has yet."""
+        return unused_roster([n for v, n in self.names.items() if v != self.me_label],
+                             self.roster)
+
+    def participants(self) -> list[str]:
+        """Me first, then every other voice heard, by name or number, then the
+        people on the roster no voice has been matched to."""
+        me = f"Me ({self.my_name})" if self.my_name else "Me"
+        out: dict[str, str] = {}     # one entry per person, even when two voices share a name
+        for label in self.heard_labels():
+            if label != self.me_label:
+                name = self.speaker_name(label)
+                out.setdefault(name_key(name), name)
+        return [me] + list(out.values()) + self.unplaced_roster()
 
     # -- queries -----------------------------------------------------------
     def recent(self, n: int) -> list[Utterance]:
@@ -191,13 +324,14 @@ class Session:
         duration = (ended - started).total_seconds()
 
         out: list[str] = []
-        out.append(f"# Meeting transcript — {context_dir.name}")
+        out.append(f"# Meeting transcript: {context_dir.name}")
         out.append("")
         out.append(f"- **Directory:** `{context_dir}`")
         out.append(f"- **Started:** {started.strftime('%Y-%m-%d %H:%M:%S')}")
         out.append(f"- **Ended:** {ended.strftime('%Y-%m-%d %H:%M:%S')}")
         out.append(f"- **Duration:** {fmt_clock(duration)}")
         out.append(f"- **Utterances:** {len(self.utterances)}")
+        out.append(f"- **Participants:** {', '.join(self.participants())}")
         out.append("")
         out.append("## Conversation")
         out.append("")

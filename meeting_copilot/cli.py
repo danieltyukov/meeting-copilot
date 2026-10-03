@@ -42,13 +42,13 @@ def load_config_env() -> None:
 def _build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="meeting-copilot",
-        description="Sparky — live meeting copilot: transcribe the room and draft "
+        description="Sparky, a live meeting copilot: transcribe the room and draft "
                     "first-person answers from your project's context.",
     )
     p.add_argument("dir", nargs="?", default=".",
                    help="Project directory whose context to use (default: current dir).")
     p.add_argument("--stt", choices=["auto", "deepgram", "local"], default="auto",
-                   help="Transcription backend (default: auto — Deepgram if a key is set, else local).")
+                   help="Transcription backend (default: auto, Deepgram if a key is set, else local).")
     p.add_argument("--deepgram-model", default="nova-3",
                    help="Deepgram model (default: nova-3).")
     p.add_argument("--no-stt-fallback", action="store_true",
@@ -58,7 +58,7 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument("--answer-model", default="sonnet",
                    help="Claude model for drafting answers (default: sonnet; switch live with 1/2/3).")
     p.add_argument("--effort", default="low", choices=["low", "medium", "high", "xhigh"],
-                   help="Reasoning effort for CLI answers (default: low — fastest).")
+                   help="Reasoning effort for CLI answers (default: low, the fastest).")
     p.add_argument("--answer-backend", choices=["auto", "api", "cli"], default="auto",
                    help="Answer generation: auto (API if ANTHROPIC_API_KEY set, else CLI), "
                         "with automatic CLI fallback whenever the API fails.")
@@ -69,6 +69,17 @@ def _build_parser() -> argparse.ArgumentParser:
                    help="Ollama server URL (default: http://localhost:11434).")
     p.add_argument("--no-diarize", action="store_true",
                    help="Disable speaker separation; transcribe everything plainly.")
+    p.add_argument("--me", metavar="NAME", default=None,
+                   help="Your name. Drafts know who \"I\" am, and the voice that "
+                        "introduces itself with it is marked as you (default: MY_NAME "
+                        "from config.env).")
+    p.add_argument("--people", metavar="NAMES", default=None,
+                   help="Who else is in the meeting, comma-separated: \"Sarah Chen, Marcus "
+                        "Lee\". Intros match these names, the last voice left gets the "
+                        "last name, and drafts and the saved transcript list them.")
+    p.add_argument("--invite", metavar="FILE.ics", default=None,
+                   help="Read who is in the meeting from a calendar invite (default: the "
+                        "one .ics file in the project directory, if there is exactly one).")
     p.add_argument("--language", default="en",
                    help="Transcription language code (default: en).")
     p.add_argument("--context-budget", type=int, default=60000,
@@ -96,6 +107,11 @@ def _resolve_backend(args) -> tuple[str, str | None]:
     return backend, key
 
 
+def _my_name(args) -> str | None:
+    """--me wins over MY_NAME (from the environment or config.env)."""
+    return (args.me or os.environ.get("MY_NAME") or "").strip() or None
+
+
 def _make_config(args) -> EngineConfig:
     backend, key = _resolve_backend(args)
     return EngineConfig(
@@ -114,6 +130,9 @@ def _make_config(args) -> EngineConfig:
         diarize=not args.no_diarize,
         language=args.language,
         context_budget=args.context_budget,
+        my_name=_my_name(args),
+        people=args.people,
+        invite=Path(args.invite).expanduser() if args.invite else None,
     )
 
 
@@ -139,9 +158,9 @@ def _self_test(args) -> int:
     # Offline path: local Whisper (transcription) + local LLM (answers).
     ollama = OllamaAssistant(model=args.ollama_model, host=args.ollama_host)
     if ollama.is_available():
-        print(f"[PASS] offline answers ready — Ollama at {args.ollama_host} ({args.ollama_model})")
+        print(f"[PASS] offline answers ready: Ollama at {args.ollama_host} ({args.ollama_model})")
     else:
-        print(f"[INFO] offline answers OFF — no Ollama at {args.ollama_host}. "
+        print(f"[INFO] offline answers OFF: no Ollama at {args.ollama_host}. "
               f"Install Ollama + `ollama pull {args.ollama_model}` for no-WiFi answers.")
 
     # Answer path: API (if configured) is primary; the CLI is the required fallback.
@@ -212,6 +231,12 @@ def _run_headless(args) -> int:
         t = e["type"]
         if t == "utterance":
             print(f"[{e['t']:6.1f}s] {e['name']}: {e['text']}")
+        elif t == "names" and e.get("source") == "intro":
+            print(f"… Speaker {e['label']} is {e['name']}")
+        elif t == "names" and e.get("source") == "roster":
+            print(f"… Speaker {e['label']} is {e['name']}, the one name left")
+        elif t == "me" and e.get("by") == "name":
+            print(f"… Speaker {e['label']} said your name, so that voice is you")
         elif t == "info":
             print(f"… {e['msg']}")
         elif t == "exported":

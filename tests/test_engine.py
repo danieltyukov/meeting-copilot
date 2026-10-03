@@ -169,15 +169,23 @@ def test_forced_answer_without_question_says_so(tmp_path):
     assert not any(e["type"] == "help" for e in events)
 
 
-def test_cycle_me(tmp_path):
-    eng, _ = _engine(tmp_path)
+def test_cycle_me_walks_the_voices_actually_heard(tmp_path):
+    eng, events = _engine(tmp_path)
+    eng.cycle_me()                               # nobody heard yet: nothing to mark
     assert eng.session.me_label is None
-    eng.cycle_me()
-    assert eng.session.me_label == "A"
-    eng.cycle_me()
-    assert eng.session.me_label == "B"
-    eng.cycle_me()
-    assert eng.session.me_label is None
+    eng.start_meeting()
+    for label in ("B", "A", "C", "B"):
+        eng._on_final(f"line from {label}", label)
+    eng._on_final("unattributed", None)          # "?" is never a candidate
+    seen = []
+    for _ in range(4):
+        eng.cycle_me()
+        seen.append(eng.session.me_label)
+    eng.end_meeting()
+    assert seen == ["B", "A", "C", None]         # first heard first, then back to none
+    mes = [e for e in events if e["type"] == "me"]
+    assert [e["label"] for e in mes][-4:] == seen
+    assert any(e["type"] == "names" and e["me"] == "C" for e in events)
 
 
 def test_engine_builds_stt_fallback(tmp_path):
@@ -275,3 +283,313 @@ def test_request_help_explicit_mode_overrides_the_decision(tmp_path, monkeypatch
     eng.end_meeting()
     helps = [e for e in events if e["type"] == "help"]
     assert helps[0]["mode"] == "points"
+
+
+# -- names ---------------------------------------------------------------------
+def test_an_intro_emits_names_before_the_utterance(tmp_path):
+    eng, events = _engine(tmp_path)
+    eng.start_meeting()
+    eng._on_final("Hi, I'm Sarah, I lead the platform team.", "B")
+    eng._on_final("I'm going to share my screen.", "B")
+    eng.end_meeting()
+    kinds = [e["type"] for e in events if e["type"] in ("names", "utterance")]
+    # start resets names; then the intro names B before its line is shown
+    assert kinds == ["names", "names", "utterance", "utterance"]
+    named = [e for e in events if e["type"] == "names"][1]
+    assert named["names"] == {"B": "Sarah"} and named["label"] == "B"
+    assert named["name"] == "Sarah" and named["source"] == "intro"
+    utts = [e for e in events if e["type"] == "utterance"]
+    assert [u["name"] for u in utts] == ["Sarah", "Sarah"]
+    assert "Sarah:** I'm going to share my screen." in eng.session.export_markdown(tmp_path)
+
+
+def test_partials_never_name_a_voice(tmp_path):
+    eng, events = _engine(tmp_path)
+    eng.start_meeting()
+    eng._on_partial("Hi, I'm Sarah", "B")
+    eng.end_meeting()
+    assert eng.session.names == {}
+    assert [e for e in events if e["type"] == "names" and e.get("label")] == []
+
+
+def test_my_name_marks_me_and_reaches_the_prompt(tmp_path, monkeypatch):
+    eng, events = _engine(tmp_path, my_name="Daniel")
+    assert all(a.my_name == "Daniel" for _, a, _ in eng.assistant.backends)
+    eng.start_meeting()
+    eng._on_final("Hi, thanks for having me, I'm Daniel.", "A")
+    me = [e for e in events if e["type"] == "me"]
+    assert me and me[-1]["label"] == "A" and me[-1]["by"] == "name"
+    assert eng.session.me_label == "A" and eng.session.names == {}
+    assert [e["name"] for e in events if e["type"] == "utterance"] == ["Me"]
+
+    from meeting_copilot.assistant import build_user_prompt
+    seen = {}
+
+    def fake(c, t, q, note="", on_delta=None, mode="answer"):
+        cli = eng.assistant.backends[0][1]
+        seen["prompt"] = build_user_prompt(c, t, q, note, mode, cli.my_name)
+        return "x"
+
+    monkeypatch.setattr(eng.assistant, "answer", fake)
+    eng.request_help(mode="points")
+    eng.end_meeting()
+    assert "My name is Daniel." in seen["prompt"]
+    assert "Me: Hi, thanks for having me" in seen["prompt"]
+
+
+def test_rename_speaker_emits_names(tmp_path):
+    eng, events = _engine(tmp_path)
+    eng.start_meeting()
+    eng._on_final("Morning.", "B")
+    eng.rename_speaker("B", "Sarah")
+    eng.rename_speaker("B", "Sarah")             # no change, no event
+    eng.rename_speaker("B", "")                  # back to automatic
+    eng.end_meeting()
+    named = [e for e in events if e["type"] == "names" and e.get("label") == "B"]
+    assert [(e["name"], e["source"]) for e in named] == [("Sarah", "user"), ("Speaker B", None)]
+    assert eng.session.names == {}
+
+
+# -- a newer draft supersedes one still streaming --------------------------------
+def test_a_newer_help_supersedes_a_streaming_draft(tmp_path, monkeypatch):
+    import threading
+    eng, events = _engine(tmp_path)
+    eng.start_meeting()
+    eng.session.add_utterance(1.0, "B", "Why Rust?")
+    first_streaming, release_first = threading.Event(), threading.Event()
+
+    def fake(c, t, q, note="", on_delta=None, mode="answer"):
+        if note == "first":
+            on_delta("old 1")
+            first_streaming.set()
+            release_first.wait(5)
+            on_delta("old 1 2")                  # arrives after the second press
+            return "old draft"
+        on_delta("new")
+        return "new draft"
+
+    monkeypatch.setattr(eng.assistant, "answer", fake)
+    t1 = threading.Thread(target=eng.request_help, kwargs={"note": "first"})
+    t1.start()
+    assert first_streaming.wait(5)
+    eng.request_help(note="second")              # the second press, while the first streams
+    release_first.set()
+    t1.join(5)
+    eng.end_meeting()
+
+    deltas = [e["text"] for e in events if e["type"] == "help_delta"]
+    assert deltas == ["old 1", "new"]            # nothing from the first after the second began
+    helps = [e["answer"] for e in events if e["type"] == "help"]
+    assert helps == ["new draft"]
+    assert [a.answer for a in eng.session.assists] == ["new draft"]
+
+
+def test_a_superseded_draft_does_not_report_its_backend_failing(tmp_path, monkeypatch):
+    import threading
+    from meeting_copilot.assistant import AssistantError
+    eng, events = _engine(tmp_path)
+    eng.start_meeting()
+    started, release = threading.Event(), threading.Event()
+    cli = eng.assistant.backends[0][1]
+    monkeypatch.setattr(cli, "is_available", lambda: True)
+    local = eng.assistant.backends[-1][1]
+    monkeypatch.setattr(local, "is_available", lambda: False)
+
+    def fake(c, t, q, note="", on_delta=None, mode="answer"):
+        if note == "first":
+            started.set()
+            release.wait(5)
+            raise AssistantError("boom")
+        return "new draft"
+
+    monkeypatch.setattr(cli, "answer", fake)
+    t1 = threading.Thread(target=eng.request_help, kwargs={"note": "first"})
+    t1.start()
+    assert started.wait(5)
+    eng.request_help(note="second")
+    release.set()
+    t1.join(5)
+    eng.end_meeting()
+    assert not any(e["type"] == "answer_switch" for e in events)
+    assert not any(e["type"] == "error" for e in events)
+    assert [e["answer"] for e in events if e["type"] == "help"] == ["new draft"]
+
+
+def test_a_failed_draft_says_so(tmp_path, monkeypatch):
+    from meeting_copilot.assistant import AssistantError
+    eng, events = _engine(tmp_path)
+    eng.start_meeting()
+
+    def boom(*a, **k):
+        raise AssistantError("no backend")
+
+    monkeypatch.setattr(eng.assistant, "answer", boom)
+    eng.request_help()
+    eng.end_meeting()
+    errors = [e for e in events if e["type"] == "error"]
+    assert errors and errors[0]["help"] is True
+
+
+# -- the mic dot ------------------------------------------------------------------
+def test_capture_loop_reports_the_level_on_and_off(tmp_path):
+    eng, events = _engine(tmp_path)
+    eng.run(FakeSource(_scripted_frames()))      # not recording: the dot still works
+    levels = [e["on"] for e in events if e["type"] == "level"]
+    assert levels == [True, False]
+    assert events[-1]["type"] == "audio_stopped"
+
+
+def test_level_turns_off_when_the_source_ends_mid_speech(tmp_path):
+    eng, events = _engine(tmp_path)
+    eng.run(FakeSource([_tone(i) for i in range(20)]))
+    assert [e["on"] for e in events if e["type"] == "level"] == [True, False]
+
+
+# -- the roster: --people, --invite, or the .ics in the launch directory ---------------
+_INVITE = ("BEGIN:VCALENDAR\r\nBEGIN:VEVENT\r\n"
+           "ORGANIZER;CN=Daniel Tyukov:mailto:daniel@example.com\r\n"
+           "ATTENDEE;CN=Sarah Chen:mailto:sarah@example.com\r\n"
+           "ATTENDEE;CN=\"Lee, Marcus\":mailto:marcus@example.com\r\n"
+           "END:VEVENT\r\nEND:VCALENDAR\r\n")
+
+
+def _infos(events):
+    return [e["msg"] for e in events if e["type"] == "info"]
+
+
+def test_people_flag_builds_the_roster(tmp_path):
+    eng, events = _engine(tmp_path, my_name="Daniel", people="Daniel Tyukov, Sarah Chen")
+    (tmp_path / "ignored.ics").write_text(_INVITE)   # --people means no invite lookup
+    eng.load_roster()
+    assert eng.session.roster == ["Sarah Chen"]
+    assert all(a.people == ["Sarah Chen"] for _, a, _ in eng.assistant.backends)
+    assert "People in this meeting: Sarah Chen." in _infos(events)
+    names = [e for e in events if e["type"] == "names"]
+    assert names[-1]["roster"] == ["Sarah Chen"]
+    assert eng.roster_source == "--people"
+
+
+def test_invite_flag(tmp_path):
+    invite = tmp_path / "elsewhere" / "sync.ics"
+    invite.parent.mkdir()
+    invite.write_text(_INVITE)
+    eng, events = _engine(tmp_path, my_name="Daniel Tyukov", invite=invite)
+    eng.load_roster()
+    assert eng.session.roster == ["Sarah Chen", "Marcus Lee"]
+    assert eng.roster_source == "sync.ics"
+
+
+def test_people_and_invite_together(tmp_path):
+    invite = tmp_path / "sync.ics"
+    invite.write_text(_INVITE)
+    eng, _ = _engine(tmp_path, my_name="Daniel", people="Priya Raman", invite=invite)
+    eng.load_roster()
+    assert eng.session.roster == ["Priya Raman", "Sarah Chen", "Marcus Lee"]
+    assert eng.roster_source == "--people and sync.ics"
+
+
+def test_the_invite_in_the_launch_directory_is_found_and_announced(tmp_path):
+    (tmp_path / "Team sync.ics").write_text(_INVITE)
+    eng, events = _engine(tmp_path, my_name="Daniel")
+    eng.load_roster()
+    assert eng.session.roster == ["Sarah Chen", "Marcus Lee"]
+    assert ("Using the invite Team sync.ics from this directory: Sarah Chen, Marcus Lee."
+            in _infos(events))
+
+
+def test_several_invites_are_not_guessed_between(tmp_path):
+    (tmp_path / "a.ics").write_text(_INVITE)
+    (tmp_path / "b.ics").write_text(_INVITE)
+    eng, events = _engine(tmp_path)
+    eng.load_roster()
+    assert eng.session.roster == []
+    assert any("Several .ics files" in m for m in _infos(events))
+
+
+def test_no_invite_and_no_flags_is_quiet(tmp_path):
+    eng, events = _engine(tmp_path)
+    eng.load_roster()
+    assert eng.session.roster == [] and _infos(events) == []
+    assert eng.roster_source is None
+
+
+def test_an_unreadable_invite_is_an_error_not_a_crash(tmp_path):
+    eng, events = _engine(tmp_path, invite=tmp_path / "missing.ics")
+    eng.load_roster()
+    assert any(e["type"] == "error" and "missing.ics" in e["msg"] for e in events)
+    assert eng.session.roster == []
+
+
+def test_prepare_loads_the_roster(tmp_path, monkeypatch):
+    (tmp_path / "sync.ics").write_text(_INVITE)
+    eng, events = _engine(tmp_path, my_name="Daniel")
+    monkeypatch.setattr(eng.monitor, "start", lambda: None)
+    eng._transcriber = FakeTranscriber("x")
+    eng.prepare()
+    assert eng.session.roster == ["Sarah Chen", "Marcus Lee"]
+    assert events[-1]["type"] == "ready"
+
+
+def test_marking_me_lets_elimination_name_the_other_voice(tmp_path):
+    eng, events = _engine(tmp_path, people="Sarah Chen")
+    eng.load_roster()
+    eng.start_meeting()
+    eng._on_final("Shall we start?", "A")
+    eng._on_final("Yes, let's.", "B")
+    assert eng.session.names == {}                    # nobody is marked as me yet
+    eng.cycle_me()                                     # A is me
+    eng.end_meeting()
+    assert eng.session.names == {"B": "Sarah Chen"}
+    roster_named = [e for e in events if e["type"] == "names" and e.get("source") == "roster"]
+    assert roster_named and roster_named[-1]["label"] == "B"
+    assert roster_named[-1]["name"] == "Sarah Chen"
+
+
+def test_intro_by_my_name_then_elimination_in_one_final(tmp_path):
+    eng, events = _engine(tmp_path, my_name="Daniel", people="Sarah Chen")
+    eng.load_roster()
+    eng.start_meeting()
+    eng._on_final("Good to see you.", "B")
+    eng._on_final("Hi, I'm Daniel.", "A")              # marks me, which settles B
+    eng.end_meeting()
+    assert eng.session.me_label == "A" and eng.session.names == {"B": "Sarah Chen"}
+    kinds = [(e["type"], e.get("source") or e.get("by")) for e in events
+             if e["type"] in ("me", "names") and e.get("label")]
+    assert kinds[-3:] == [("me", "name"), ("names", "me"), ("names", "roster")]
+
+
+def test_a_second_meeting_starts_with_nobody_marked_as_me(tmp_path):
+    eng, events = _engine(tmp_path)
+    eng.start_meeting()
+    eng._on_final("Hello.", "A")
+    eng.cycle_me()
+    assert eng.session.me_label == "A"
+    eng.end_meeting()
+    eng.start_meeting()                               # new stream, letters restart
+    eng.end_meeting()
+    assert eng.session.me_label is None
+    last_names = [e for e in events if e["type"] == "names"][-1]
+    assert last_names["me"] is None and last_names["names"] == {}
+
+
+def test_only_cleaned_roster_names_reach_the_prompt(tmp_path, monkeypatch):
+    long_name = "A display name that goes on and on well past sixty characters in all"
+    eng, _ = _engine(tmp_path, my_name="Daniel", people=(
+        f"Sarah Chen (Host); Add people; mic_off; {long_name}; sarah@example.com; "
+        "Participants (4); Daniel Tyukov (You); Marcus Lee"))
+    eng.load_roster()
+    assert eng.session.roster == ["Sarah Chen", "Marcus Lee"]
+    eng.start_meeting()
+    seen = {}
+
+    def fake(c, t, q, note="", on_delta=None, mode="answer"):
+        cli = eng.assistant.backends[0][1]
+        seen["prompt"] = cli.build_user_prompt(c, t, q, note, mode)
+        return "x"
+
+    monkeypatch.setattr(eng.assistant, "answer", fake)
+    eng.request_help()
+    eng.end_meeting()
+    assert "PEOPLE IN THIS MEETING: Sarah Chen, Marcus Lee\n" in seen["prompt"]
+    for junk in ("Add people", "mic_off", long_name, "@", "Participants", "(Host)", "Tyukov"):
+        assert junk not in seen["prompt"]

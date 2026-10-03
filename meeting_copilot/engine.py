@@ -3,7 +3,7 @@
 The engine reads frames from an audio source and forwards them to a pluggable
 transcription backend. The backend reports partial (live) and final utterances
 through callbacks; the engine commits finals to the session and emits events for
-the UI. Because forwarding is cheap, the capture loop never blocks — which is
+the UI. Because forwarding is cheap, the capture loop never blocks, which is
 what keeps the whole stream alive (the original bug was transcribing inline).
 """
 
@@ -19,11 +19,12 @@ from typing import Callable
 
 from .assistant import (DEFAULT_OLLAMA_MODEL, ApiAssistant, AssistantError,
                         ChainAssistant, CliAssistant, OllamaAssistant)
-from .audio import UtteranceSegmenter
+from .audio import LevelGate, UtteranceSegmenter, frame_rms
 from .backends import Backend, DeepgramBackend, FallbackSttBackend, LocalBackend
 from .context import gather_context
 from .diarize import Diarizer
 from .net import ConnectivityMonitor
+from .roster import find_invite, ics_files, parse_ics, parse_people
 from .session import Session
 from .transcribe import Transcriber
 
@@ -48,6 +49,9 @@ class EngineConfig:
     diarize: bool = True
     language: str | None = "en"
     context_budget: int = 60000
+    my_name: str | None = None             # --me / MY_NAME: marks my voice, steers drafts
+    people: str | None = None              # --people "Sarah Chen, Marcus Lee"
+    invite: Path | None = None             # --invite FILE.ics (else the one .ics in root)
 
 
 ANSWER_MODELS = ["haiku", "sonnet", "opus"]
@@ -57,9 +61,17 @@ class CopilotEngine:
     def __init__(self, config: EngineConfig, on_event: EventCb | None = None) -> None:
         self.cfg = config
         self.on_event = on_event or (lambda e: None)
-        self.session = Session()
+        self.session = Session(my_name=config.my_name)
         self.monitor = ConnectivityMonitor(on_change=self._on_connectivity_change)
+        # A newer request_help supersedes one still streaming: each draft carries
+        # the generation it started under, and only the newest may emit. The
+        # thread-local lets the chain's switch callback know whose draft it is in.
+        self._help_gen = 0
+        self._help_lock = threading.RLock()   # makes "is it current? then emit" atomic
+        self._help_local = threading.local()
         self.assistant, self.answer_primary = self._build_assistant(config)
+        self.assistant.set_my_name(config.my_name or "")
+        self.roster_source: str | None = None   # where the roster came from, for the UI
         self.context: str = ""
         self.backend: Backend | None = None
         self._transcriber: Transcriber | None = None  # lazily built for local
@@ -91,7 +103,8 @@ class CopilotEngine:
             ("local", OllamaAssistant(model=config.ollama_model, host=config.ollama_host), False))
         chain = ChainAssistant(
             backends, is_online=self.monitor.is_online,
-            on_switch=lambda name, reason: self._emit("answer_switch", failed=name, reason=reason))
+            on_switch=lambda name, reason: self._emit_for_draft(
+                getattr(self._help_local, "gen", None), "answer_switch", failed=name, reason=reason))
         return chain, ("api" if use_api else "cli")
 
     @property
@@ -156,11 +169,72 @@ class CopilotEngine:
     def _emit(self, type_: str, **kw) -> None:
         self.on_event({"type": type_, **kw})
 
+    def _emit_for_draft(self, gen: int | None, type_: str, **kw) -> bool:
+        """Emit only while ``gen`` is the newest draft; a superseded one stays quiet."""
+        with self._help_lock:
+            if gen is not None and gen != self._help_gen:
+                return False
+            self._emit(type_, **kw)
+            return True
+
+    def _emit_names(self, label: str | None = None, source: str | None = None) -> None:
+        with self._lock:
+            names, me = dict(self.session.names), self.session.me_label
+            roster = list(self.session.roster)
+            name = self.session.speaker_name(label) if label else None
+        self._emit("names", names=names, me=me, roster=roster, label=label, name=name,
+                   source=source)
+
+    def _emit_changes(self, changes: list[tuple[str, str]]) -> None:
+        for label, source in changes:
+            if source == "me":
+                self._emit("me", label=label, by="name")
+            self._emit_names(label, source)
+
+    def load_roster(self) -> None:
+        """Who else is in the meeting: --people, --invite, or else the single
+        .ics invite at the root of the launch directory. The names go into the
+        drafts and the saved participants, and name voices by elimination."""
+        names: list[str] = []
+        sources: list[str] = []
+        if self.cfg.people:
+            names += parse_people(self.cfg.people)
+            sources.append("--people")
+        invite = self.cfg.invite
+        found = False
+        if invite is None and not self.cfg.people:
+            invite = find_invite(self.cfg.root)
+            found = invite is not None
+            if invite is None and len(ics_files(self.cfg.root)) > 1:
+                self._emit("info", msg="Several .ics files here, so no invite was used. "
+                                       "Pass --invite FILE to pick one.")
+        if invite is not None:
+            try:
+                names += parse_ics(Path(invite).read_text(encoding="utf-8", errors="replace"))
+                sources.append(Path(invite).name)
+            except OSError as exc:
+                self._emit("error", msg=f"Could not read the invite {invite}: {exc}")
+        with self._lock:
+            changes = self.session.set_roster(names)
+            roster = list(self.session.roster)
+        self.assistant.set_people(roster)
+        self.roster_source = " and ".join(sources) or None
+        if found and roster:
+            self._emit("info", msg=f"Using the invite {Path(invite).name} from this directory: "
+                                   f"{', '.join(roster)}.")
+        elif roster:
+            self._emit("info", msg=f"People in this meeting: {', '.join(roster)}.")
+        elif found:
+            self._emit("info", msg=f"The invite {Path(invite).name} lists nobody besides you.")
+        self._emit_names()
+        self._emit_changes(changes)
+
     def prepare(self) -> None:
         self._emit("info", msg=f"Reading context of {self.cfg.root} ...")
         self.context = gather_context(self.cfg.root, self.cfg.context_budget)
         self.monitor.start()
         self._emit("connectivity", online=self.online)
+        self.load_roster()
         if self.cfg.stt_backend == "local":
             self._emit("info", msg=f"Loading Whisper '{self.cfg.whisper_model}' ...")
             self._ensure_transcriber()
@@ -189,6 +263,7 @@ class CopilotEngine:
             self.session.start()
             self._start_mono = time.monotonic()
         self._emit("state", state=self.session.state.value)
+        self._emit_names()   # a new meeting starts with nobody named
 
     def end_meeting(self) -> Path | None:
         with self._lock:
@@ -227,12 +302,25 @@ class CopilotEngine:
         return None
 
     def cycle_me(self) -> None:
-        order = [None, "A", "B"]
+        """Mark the next voice heard as me: none, then each voice in the order
+        they first spoke, then none again."""
         with self._lock:
+            order = [None, *self.session.heard_labels()]
             cur = self.session.me_label
-            nxt = order[(order.index(cur) + 1) % len(order)] if cur in order else "A"
+            nxt = order[(order.index(cur) + 1) % len(order)] if cur in order else order[-1]
             self.session.set_me(nxt)
-        self._emit("me", label=nxt)
+            changes = self.session.eliminate()   # knowing who I am may settle the last voice
+        self._emit("me", label=nxt, by="key")
+        self._emit_names(nxt, "me")
+        self._emit_changes(changes)
+
+    def rename_speaker(self, label: str, name: str) -> None:
+        """Name a voice by hand; an empty name returns it to automatic."""
+        with self._lock:
+            changed = self.session.rename(label, name)
+            source = self.session.name_sources.get(label)
+        if changed:
+            self._emit_names(label, source)
 
     def set_answer_model(self, model: str) -> None:
         self.cfg.answer_model = model
@@ -259,12 +347,20 @@ class CopilotEngine:
             utt = self.session.add_utterance(self._elapsed(), speaker or "?", text)
             if utt is None:
                 return
+            # Names come from finals only: a partial is a guess that may change.
+            changes = self.session.observe_name(utt)
             name = self.session.speaker_name(utt.speaker)
+        self._emit_changes(changes)
         self._emit("utterance", t=utt.t, speaker=utt.speaker, name=name, text=utt.text)
 
     # -- pipeline ----------------------------------------------------------
     def run(self, source) -> None:
-        """Blocking capture loop. Run in a background thread."""
+        """Blocking capture loop. Run in a background thread.
+
+        Besides forwarding frames it keeps a level gate for the mic dot, which
+        shows whether the room is being heard even before the meeting starts.
+        The gate only reports changes, a few times a second at most."""
+        gate = LevelGate()
         try:
             with source as src:
                 for frame in src.frames():
@@ -272,8 +368,13 @@ class CopilotEngine:
                         break
                     if self.session.is_recording and self.backend is not None:
                         self.backend.feed(frame)
+                    on = gate.update(frame_rms(frame))
+                    if on is not None:
+                        self._emit("level", on=on)
         except Exception as exc:
             self._emit("error", msg=f"audio: {exc}")
+        if gate.state:
+            self._emit("level", on=False)
         self._emit("audio_stopped")
 
     def stop(self) -> None:
@@ -289,6 +390,10 @@ class CopilotEngine:
         ``points`` (talking points to carry the conversation on from the last
         thing said; works even before anyone has spoken, as openers). ``note``
         is optional extra context the user typed.
+
+        A newer request supersedes one still streaming: the older one runs to
+        the end on its own thread, but nothing it produces reaches the UI or
+        the saved assists.
         """
         with self._lock:
             if mode == "auto":
@@ -303,15 +408,23 @@ class CopilotEngine:
         if question is None:
             self._emit("info", msg="No question captured yet. Start the meeting first.")
             return
-        self._emit("help_started", question=question, note=note, mode=mode)
+        with self._help_lock:
+            self._help_gen += 1
+            gen = self._help_gen
+            self._emit("help_started", question=question, note=note, mode=mode)
+        self._help_local.gen = gen
         try:
             answer = self.assistant.answer(
                 self.context, transcript, question, note=note,
-                on_delta=lambda text: self._emit("help_delta", text=text), mode=mode)
+                on_delta=lambda text: self._emit_for_draft(gen, "help_delta", text=text),
+                mode=mode)
         except AssistantError as exc:
-            self._emit("error", msg=f"assistant: {exc}")
+            self._emit_for_draft(gen, "error", msg=f"assistant: {exc}", help=True)
             return
         served = getattr(self.assistant, "last_served", None) or self.answer_primary
-        with self._lock:
-            self.session.add_assist(self._elapsed(), question, answer, kind=mode)
-        self._emit("help", question=question, answer=answer, served=served, mode=mode)
+        with self._help_lock:
+            if gen != self._help_gen:
+                return                       # superseded while it was streaming
+            with self._lock:
+                self.session.add_assist(self._elapsed(), question, answer, kind=mode)
+            self._emit("help", question=question, answer=answer, served=served, mode=mode)

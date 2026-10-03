@@ -248,3 +248,55 @@ def test_chain_passes_mode_through():
     ch = ChainAssistant([("api", b, True)], is_online=lambda: True)
     assert ch.answer("c", "t", "q", mode="points") == "points"
     assert b.mode == "points"
+
+
+# -- names ------------------------------------------------------------------------
+def test_my_name_goes_into_the_prompt_before_the_transcript():
+    from meeting_copilot.assistant import build_user_prompt
+    p = build_user_prompt("CTX", "Sarah: Why Rust?", "Why Rust?", my_name="Daniel")
+    assert "=== WHO I AM ===\nMy name is Daniel." in p
+    assert p.index("WHO I AM") < p.index("CONVERSATION SO FAR")
+    assert "WHO I AM" not in build_user_prompt("CTX", "t", "q")
+
+
+def test_rules_say_voices_are_labelled_by_name_when_known():
+    from meeting_copilot.assistant import system_rules
+    for mode in ("answer", "points"):
+        rules = system_rules(mode)
+        assert "labelled by name when known" in rules
+        assert '"Me"' in rules
+
+
+def test_backends_carry_my_name(monkeypatch):
+    a = Assistant()
+    monkeypatch.setattr(a, "is_available", lambda: True)
+    seen = {}
+    monkeypatch.setattr(a, "_run_blocking", lambda user, mode="answer": seen.update(u=user) or "x")
+    ch = ChainAssistant([("cli", a, True), ("local", OllamaAssistant(), False),
+                         ("api", ApiAssistant(api_key="x"), True)])
+    ch.set_my_name("Daniel")
+    assert all(b.my_name == "Daniel" for _, b, _ in ch.backends)
+    a.answer("c", "t", "q")
+    assert "My name is Daniel." in seen["u"]
+    assert "My name is Daniel." in a.build_user_prompt("c", "t", "q")
+
+
+def test_people_in_the_meeting_go_into_the_prompt():
+    from meeting_copilot.assistant import build_user_prompt
+    p = build_user_prompt("CTX", "t", "q", my_name="Daniel", people=["Sarah Chen", "Marcus Lee"])
+    assert "PEOPLE IN THIS MEETING: Sarah Chen, Marcus Lee" in p
+    assert p.index("WHO I AM") < p.index("PEOPLE IN THIS MEETING") < p.index("CONVERSATION")
+    assert "PEOPLE IN THIS MEETING" not in build_user_prompt("CTX", "t", "q", people=[])
+
+
+def test_backends_carry_the_people(monkeypatch):
+    a = Assistant()
+    monkeypatch.setattr(a, "is_available", lambda: True)
+    seen = {}
+    monkeypatch.setattr(a, "_run_blocking", lambda user, mode="answer": seen.update(u=user) or "x")
+    ch = ChainAssistant([("cli", a, True), ("local", OllamaAssistant(), False),
+                         ("api", ApiAssistant(api_key="x"), True)])
+    ch.set_people(["Sarah Chen"])
+    assert all(b.people == ["Sarah Chen"] for _, b, _ in ch.backends)
+    a.answer("c", "t", "q")
+    assert "PEOPLE IN THIS MEETING: Sarah Chen" in seen["u"]

@@ -107,6 +107,49 @@ def _rms(frame_f32: np.ndarray) -> float:
     return float(np.sqrt(np.mean(frame_f32 * frame_f32)) + 1e-12)
 
 
+def frame_rms(frame_int16: np.ndarray) -> float:
+    """Level of one int16 frame on a 0..1 scale. Cheap enough for every frame."""
+    f = frame_int16.astype(np.float32)
+    return float(np.sqrt(np.mean(f * f))) / 32768.0
+
+
+class LevelGate:
+    """Per-frame levels in, a throttled "someone is speaking" flag out.
+
+    Drives the mic dot. It turns on above ``on`` and off only after ``hold_ms``
+    below ``off`` (hysteresis, so the dot does not flicker between words), and a
+    change is reported at most once per ``interval_ms``. Time is counted in
+    frames, so it needs no clock. ``update`` returns the new state when it
+    should be reported, else None.
+    """
+
+    def __init__(self, on: float = 0.012, off: float = 0.006, hold_ms: int = 300,
+                 interval_ms: int = 200) -> None:
+        self.on, self.off = on, off
+        self.hold_frames = max(1, hold_ms // FRAME_MS)
+        self.interval_frames = max(1, interval_ms // FRAME_MS)
+        self.state = False           # last reported
+        self._want = False
+        self._quiet = 0              # frames below `off` while on
+        self._since = self.interval_frames  # frames since the last report
+
+    def update(self, level: float) -> bool | None:
+        self._since += 1
+        if level >= self.on:
+            self._want, self._quiet = True, 0
+        elif level < self.off:
+            if self._want:
+                self._quiet += 1
+                if self._quiet >= self.hold_frames:
+                    self._want, self._quiet = False, 0
+        else:
+            self._quiet = 0          # between the thresholds: keep what we have
+        if self._want != self.state and self._since >= self.interval_frames:
+            self.state, self._since = self._want, 0
+            return self.state
+        return None
+
+
 class UtteranceSegmenter:
     """Group frames into utterances separated by silence.
 

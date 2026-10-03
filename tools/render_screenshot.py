@@ -2,7 +2,10 @@
 
 The dashboard is drawn by CopilotTUI itself into a recording console with a
 scripted conversation, then exported as SVG, so the picture can never drift
-from what the app draws. Rasterise with tools/render_sparky.sh.
+from what the app draws. The lines go through the engine's real final-line path,
+so the names on screen come from the real introduction rule (and "I'm Daniel"
+marks that voice as me because the engine runs with --me Daniel). Rasterise
+with tools/render_sparky.sh.
 
     .venv/bin/python tools/render_screenshot.py
 """
@@ -28,10 +31,18 @@ THEME = TerminalTheme(
      (56, 189, 248), (232, 121, 249), (56, 189, 248), (255, 255, 255)],
 )
 
+# (seconds, raw voice label, text): the engine names the voices from these.
 LINES = [
-    (8, "Speaker B", "Walk me through your gain stage: why this topology, and what else did you consider?"),
-    (21, "Me", "Sure, let me explain the trade-offs."),
-    (34, "Speaker B", "And how does that choice affect your phase margin?"),
+    (2, "B", "Hi, I'm Sarah, I lead the analog team. Thanks for coming in."),
+    (6, "A", "Thanks for having me, I'm Daniel."),
+    (9, "C", "Tom here, I'll be taking notes."),
+    (12, "B", "We read through the repo before the call, so we can go straight to the design."),
+    (18, "A", "Sounds good. It is a two-stage op amp for a sensor front end, simulated in LTspice."),
+    (25, "C", "Which process are you targeting?"),
+    (28, "A", "A 180 nanometre process with a 1.8 volt supply."),
+    (34, "B", "Walk me through your gain stage: why this topology, and what else did you consider?"),
+    (47, "A", "Sure, let me explain the trade-offs."),
+    (61, "B", "And how does that choice affect your phase margin?"),
 ]
 
 ANSWER = (
@@ -53,21 +64,24 @@ POINTS = (
 
 
 def render(mode: str, path: Path) -> None:
-    eng = CopilotEngine(EngineConfig(root=ROOT, stt_backend="deepgram",
-                                     deepgram_api_key="x", anthropic_api_key="x"))
+    eng = CopilotEngine(EngineConfig(root=ROOT, stt_backend="deepgram", deepgram_api_key="x",
+                                     anthropic_api_key="x", my_name="Daniel"))
     tui = CopilotTUI(eng, source_factory=lambda: None)
+    # 100x42 keeps the PNG at the 820x712 the README and the site lay out for.
     tui.console = Console(width=100, height=42, record=True, force_terminal=True)
-    tui.state = "recording"
     tui.online = True
-    tui.me_label = "A"
+    eng.session.start()
+    tui._on_event({"type": "state", "state": "recording"})
     tui._start_mono = time.monotonic() - 95
-    for t, name, text in LINES:
-        tui._on_event({"type": "utterance", "t": t, "name": name, "text": text})
-    tui._on_event({"type": "partial", "name": "Me", "text": "Right, so the dominant pole sits at"})
+    tui._on_event({"type": "level", "on": True})
+    for t, label, text in LINES:
+        eng._elapsed = lambda t=t: float(t)
+        eng._on_final(text, label)
+    tui._on_event({"type": "partial", "speaker": "A", "text": "Right, so the dominant pole sits at"})
     if mode == "answer":
-        q, body = LINES[0][2], ANSWER
+        q, body = LINES[7][2], ANSWER
     else:
-        q, body = LINES[2][2], POINTS
+        q, body = LINES[-1][2], POINTS
     tui._on_event({"type": "help_started", "question": q, "note": "", "mode": mode})
     tui._on_event({"type": "help", "question": q, "answer": body, "served": "api", "mode": mode})
     tui.console.print(tui._render())

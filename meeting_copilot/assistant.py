@@ -43,7 +43,9 @@ meta-commentary, no "you could say" — just my answer.
 - Be concrete and specific to THIS project; cite real details from the context when relevant.
 - For behavioral or open-ended questions, answer confidently and honestly the way an engineer \
 who built this project would.
-- Several people may be in the room; "Speaker A", "Speaker B" and so on are different voices.
+- Several people may be in the room. My lines are labelled "Me". Other voices are labelled \
+by name when known (address them by it when that is natural), otherwise "Speaker A", \
+"Speaker B" and so on.
 - If the message contains a line starting with "MY EXTRA INSTRUCTION:", treat it as the most \
 important steer for what I want from the answer, and follow it closely.
 - Do not use any tools. Answer directly from what is provided."""
@@ -61,7 +63,9 @@ other side has not heard yet, or steer toward what I want to cover.
 - Make at least one point a question I can ask them, so the conversation keeps moving.
 - Be specific to THIS project; cite real details from the context. No generic filler.
 - If the conversation has not started yet, give me points to open with.
-- Several people may be in the room; "Speaker A", "Speaker B" and so on are different voices.
+- Several people may be in the room. My lines are labelled "Me". Other voices are labelled \
+by name when known (address them by it when that is natural), otherwise "Speaker A", \
+"Speaker B" and so on.
 - If the message contains a line starting with "MY EXTRA INSTRUCTION:", treat it as the most \
 important steer for what I want, and follow it closely.
 - Do not use any tools. Work directly from what is provided."""
@@ -94,14 +98,18 @@ class AssistantError(RuntimeError):
 
 
 def build_user_prompt(context: str, transcript: str, question: str, note: str = "",
-                      mode: str = "answer") -> str:
+                      mode: str = "answer", my_name: str = "", people=()) -> str:
     """Assemble the user message. ``question`` is the latest question in ``answer``
     mode and the last thing anyone said in ``points`` mode (empty before the
-    conversation starts)."""
-    parts = [
-        f"=== PROJECT CONTEXT ===\n{context.strip() or '(no context gathered)'}",
-        f"=== CONVERSATION SO FAR ===\n{transcript.strip() or '(nothing yet)'}",
-    ]
+    conversation starts). ``my_name`` tells the model who "I" am, ``people``
+    who else is in the meeting."""
+    parts = [f"=== PROJECT CONTEXT ===\n{context.strip() or '(no context gathered)'}"]
+    if my_name.strip():
+        parts.append(f"=== WHO I AM ===\nMy name is {my_name.strip()}. "
+                     'Lines labelled "Me" are mine.')
+    if people:
+        parts.append(f"PEOPLE IN THIS MEETING: {', '.join(people)}")
+    parts.append(f"=== CONVERSATION SO FAR ===\n{transcript.strip() or '(nothing yet)'}")
     if mode == "points":
         anchor = question.strip() or "(the conversation has not started yet: give me points to open with)"
         parts.append(f"=== LAST THING SAID (continue from here) ===\n{anchor}")
@@ -123,6 +131,8 @@ class CliAssistant:
         self.effort = effort
         self.timeout = timeout
         self.binary = binary
+        self.my_name = ""
+        self.people: list[str] = []
 
     def is_available(self) -> bool:
         return shutil.which(self.binary) is not None
@@ -133,9 +143,16 @@ class CliAssistant:
     def set_effort(self, effort: str) -> None:
         self.effort = effort
 
+    def set_my_name(self, name: str) -> None:
+        self.my_name = name or ""
+
+    def set_people(self, people) -> None:
+        self.people = list(people)
+
     def build_user_prompt(self, context: str, transcript: str, question: str, note: str = "",
                           mode: str = "answer") -> str:
-        return build_user_prompt(context, transcript, question, note, mode)
+        return build_user_prompt(context, transcript, question, note, mode, self.my_name,
+                                 self.people)
 
     def _cmd(self, user_prompt: str, stream: bool, mode: str = "answer") -> list[str]:
         cmd = [
@@ -168,7 +185,8 @@ class CliAssistant:
         if not self.is_available():
             raise AssistantError(
                 f"'{self.binary}' CLI not found on PATH. Install/login to Claude Code first.")
-        user = build_user_prompt(context, transcript, question, note, mode)
+        user = build_user_prompt(context, transcript, question, note, mode, self.my_name,
+                                 self.people)
         if on_delta is None:
             return self._run_blocking(user, mode=mode)
         return self._run_streaming(user, on_delta, mode=mode)
@@ -245,6 +263,8 @@ class ApiAssistant:
         self.model = model
         self.max_tokens = max_tokens
         self.timeout = timeout
+        self.my_name = ""
+        self.people: list[str] = []
         self._client = None
 
     def is_available(self) -> bool:
@@ -252,6 +272,12 @@ class ApiAssistant:
 
     def set_model(self, model: str) -> None:
         self.model = model
+
+    def set_my_name(self, name: str) -> None:
+        self.my_name = name or ""
+
+    def set_people(self, people) -> None:
+        self.people = list(people)
 
     def set_effort(self, effort: str) -> None:  # accepted for interface parity; API runs fast
         pass
@@ -274,7 +300,8 @@ class ApiAssistant:
     def answer(self, context: str, transcript: str, question: str, note: str = "",
                on_delta: Callable[[str], None] | None = None, mode: str = "answer") -> str:
         client = self._ensure_client()
-        user = build_user_prompt(context, transcript, question, note, mode)
+        user = build_user_prompt(context, transcript, question, note, mode, self.my_name,
+                                 self.people)
         parts: list[str] = []
         try:
             # No `thinking` param => thinking off on haiku/sonnet/opus: fastest path.
@@ -322,9 +349,17 @@ class OllamaAssistant:
         self.model = model
         self.host = host.rstrip("/")
         self.timeout = timeout
+        self.my_name = ""
+        self.people: list[str] = []
 
     def set_model(self, model: str) -> None:  # keep the configured local model
         pass
+
+    def set_my_name(self, name: str) -> None:
+        self.my_name = name or ""
+
+    def set_people(self, people) -> None:
+        self.people = list(people)
 
     def set_effort(self, effort: str) -> None:
         pass
@@ -338,7 +373,8 @@ class OllamaAssistant:
 
     def answer(self, context: str, transcript: str, question: str, note: str = "",
                on_delta: Callable[[str], None] | None = None, mode: str = "answer") -> str:
-        user = build_user_prompt(context, transcript, question, note, mode)
+        user = build_user_prompt(context, transcript, question, note, mode, self.my_name,
+                                 self.people)
         body = json.dumps({
             "model": self.model,
             "messages": [
@@ -418,6 +454,16 @@ class ChainAssistant:
         for _, a, _ in self.backends:
             if hasattr(a, "set_effort"):
                 a.set_effort(effort)
+
+    def set_my_name(self, name: str) -> None:
+        for _, a, _ in self.backends:
+            if hasattr(a, "set_my_name"):
+                a.set_my_name(name)
+
+    def set_people(self, people) -> None:
+        for _, a, _ in self.backends:
+            if hasattr(a, "set_people"):
+                a.set_people(people)
 
     def answer(self, context: str, transcript: str, question: str, note: str = "",
                on_delta: Callable[[str], None] | None = None, mode: str = "answer") -> str:

@@ -1,0 +1,55 @@
+{
+  "_comment": "Shared by tests/test_roster.py and extension/test_names.cjs: the meeting roster (names from the meeting itself: the call page, a calendar invite, or typed) and how it names voices. See docs/superpowers/specs/2026-10-03-speaker-names-design.md, section 'Names from the meeting'.",
+  "clean": [
+    ["Sarah Chen", "Sarah Chen"],
+    ["  Priya   Raman ", "Priya Raman"],
+    ["Sarah Chen (Host)", "Sarah Chen"],
+    ["Wei Chen (Guest)", "Wei Chen"],
+    ["Wei Chen (External)", "Wei Chen"],
+    ["Marcus Lee (Presenting)", "Marcus Lee"],
+    ["Marcus Lee\nPresenting", "Marcus Lee"],
+    ["Anil Patel, Organizer", "Anil Patel"],
+    ["You", null],
+    ["Daniel Tyukov (You)", null],
+    ["Daniel Tyukov (me)", null],
+    ["Presentation", null],
+    ["Organizer", null],
+    ["sarah.chen@example.com", null],
+    ["+1 415 555 0100", null],
+    ["", null],
+    ["Add people", null],
+    ["Participants", null],
+    ["People (4)", null],
+    ["In this meeting (3)", null],
+    ["Contributors", null],
+    ["mic_off", null],
+    ["Sarah Chen, PhD", "Sarah Chen"],
+    ["Anil Patel (MD)", "Anil Patel"],
+    ["This text is far too long to be anybody's display name in a meeting app", null],
+    ["PhD", null],
+    ["John Smith, Esq.", "John Smith"]
+  ],
+  "match": [
+    ["Sarah", ["Sarah Chen", "Marcus Lee"], "Sarah Chen"],
+    ["sarah chen", ["Sarah Chen", "Marcus Lee"], "Sarah Chen"],
+    ["Zoe", ["Zoë Kim"], "Zoë Kim"],
+    ["Sam", ["Sam Lee", "Sam Ortiz"], "Sam"],
+    ["Priya", ["Sarah Chen"], "Priya"],
+    ["Dr. Patel", ["Anil Patel"], "Dr. Patel"],
+    ["Marcus", [], "Marcus"]
+  ],
+  "others": [
+    ["Daniel", ["Daniel Tyukov", "Sarah Chen"], ["Sarah Chen"]],
+    ["", ["Daniel Tyukov", "Sarah Chen"], ["Daniel Tyukov", "Sarah Chen"]],
+    ["Daniel Tyukov", ["daniel tyukov", "Marcus Lee", "Marcus Lee"], ["Marcus Lee"]]
+  ],
+  "eliminate": [
+    {"why": "1:1 call: one voice, one other person", "voices": ["v1"], "names": {}, "roster": ["Sarah Chen"], "expect": {"v1": "Sarah Chen"}},
+    {"why": "the last voice gets the last name", "voices": ["v1", "v2"], "names": {"v1": "Sarah Chen"}, "roster": ["Sarah Chen", "Marcus Lee"], "expect": {"v2": "Marcus Lee"}},
+    {"why": "a short intro name still uses up its roster entry", "voices": ["v1", "v2"], "names": {"v1": "Sarah"}, "roster": ["Sarah Chen", "Marcus Lee"], "expect": {"v2": "Marcus Lee"}},
+    {"why": "two unnamed voices: no guessing", "voices": ["v1", "v2"], "names": {}, "roster": ["Sarah Chen", "Marcus Lee"], "expect": {}},
+    {"why": "more voices than people: diarization split someone", "voices": ["v1", "v2", "v3"], "names": {"v1": "Sarah Chen", "v2": "Marcus Lee"}, "roster": ["Sarah Chen", "Marcus Lee"], "expect": {}},
+    {"why": "fewer voices than people: someone has not spoken", "voices": ["v1"], "names": {}, "roster": ["Sarah Chen", "Marcus Lee"], "expect": {}},
+    {"why": "nothing left to assign", "voices": ["v1"], "names": {"v1": "Sarah Chen"}, "roster": ["Sarah Chen"], "expect": {}}
+  ]
+}
