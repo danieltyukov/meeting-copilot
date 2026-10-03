@@ -6,6 +6,26 @@ extension carry their own version numbers, both noted per release.
 
 ## [Unreleased]
 
+## [0.4.1] - 2026-10-03
+
+Extension 0.5.1.
+
+### Changed
+- Answers use the current Claude models: `sonnet` is now Claude Sonnet 5.5
+  (`claude-sonnet-5-5`) and `opus` is Claude Opus 5.5 (`claude-opus-5-5`), in
+  both the terminal app and the panel. `haiku` stays Claude Haiku 4.5. Sonnet
+  keeps thinking off (`between_tools`, its thinking-off setting); Opus 5.5
+  always thinks, so it runs at low effort with room in the token cap for the
+  thinking. Transcription stays on Deepgram Nova-3, still Deepgram's newest
+  general model with diarization.
+- A draft Claude declines now says so. In the terminal app it falls through to
+  the next backend; in the panel it shows a message instead of an empty box.
+- New README banner, drawn from the site's own stylesheet with a dark variant
+  (`tools/banner.html`, rendered by `tools/render_sparky.sh`).
+
+### Removed
+- The "visible by design" copy on the site and in the READMEs.
+
 ## [0.4.0] - 2026-10-03
 
 Extension 0.5.0.

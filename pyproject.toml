@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "meeting-copilot"
-version = "0.4.0"
+version = "0.4.1"
 description = "Sparky, a live meeting copilot: transcribe the room and draft first-person answers and talking points from your project's context."
 readme = "README.md"
 license = { text = "MIT" }
