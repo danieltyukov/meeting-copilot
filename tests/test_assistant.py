@@ -176,10 +176,37 @@ def test_ollama_parses_streamed_chat(monkeypatch):
 def test_api_model_id_mapping():
     a = ApiAssistant(api_key="x", model="haiku")
     assert a._model_id() == "claude-haiku-4-5"
+    a.set_model("sonnet")
+    assert a._model_id() == "claude-sonnet-5-5"
     a.set_model("opus")
-    assert a._model_id() == "claude-opus-4-8"
+    assert a._model_id() == "claude-opus-5-5"
     a.set_model("claude-some-future-id")  # pass-through for unknown names
     assert a._model_id() == "claude-some-future-id"
+
+
+def test_api_request_settings_per_model():
+    a = ApiAssistant(api_key="x", model="haiku")
+    assert a._request(512) == {"model": "claude-haiku-4-5", "max_tokens": 512}
+    a.set_model("sonnet")   # Sonnet 5.5 rejects disabled thinking; between_tools is off
+    assert a._request(512) == {"model": "claude-sonnet-5-5", "max_tokens": 512,
+                               "thinking": {"type": "between_tools"}}
+    a.set_model("opus")     # Opus 5.5 always thinks: low effort, room for the thinking
+    req = a._request(512)
+    assert req["output_config"] == {"effort": "low"} and "thinking" not in req
+    assert req["max_tokens"] > 512
+
+
+def test_api_refusal_falls_through_as_an_error():
+    class _Stream:
+        text_stream = iter(())
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+        def get_final_message(self):
+            return type("M", (), {"stop_reason": "refusal"})()
+    a = ApiAssistant(api_key="x", model="sonnet")
+    a._client = type("C", (), {"messages": type("Ms", (), {"stream": lambda self, **kw: _Stream()})()})()
+    with pytest.raises(AssistantError, match="declined"):
+        a.answer("c", "t", "q")
 
 
 def test_api_availability_from_key(monkeypatch):

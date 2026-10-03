@@ -11,7 +11,16 @@
 // "answer" to a question just put to you, or "points" (first-person talking
 // points that carry the conversation on from the last thing said).
 
-const API_MODEL_IDS = { haiku: "claude-haiku-4-5", sonnet: "claude-sonnet-4-6", opus: "claude-opus-4-8" };
+const API_MODEL_IDS = { haiku: "claude-haiku-4-5", sonnet: "claude-sonnet-5-5", opus: "claude-opus-5-5" };
+// Per-model request settings, all for time to the first word, as in the terminal
+// app. Sonnet 5.5 rejects disabled thinking; between_tools is its thinking-off
+// setting. Opus 5.5 always thinks, so it runs at low effort with token headroom
+// for the thinking, which counts toward max_tokens.
+const API_MODEL_OPTIONS = {
+  "claude-sonnet-5-5": { thinking: { type: "between_tools" } },
+  "claude-opus-5-5": { output_config: { effort: "low" } },
+};
+const THINKING_HEADROOM = { "claude-opus-5-5": 4096 };
 
 const ANSWER_RULES = `You are my real-time meeting copilot. Read my context and the live transcript, then \
 draft MY answer to the other person's latest question.
@@ -925,6 +934,7 @@ async function help(mode = "auto") {
   box.className = "answer thinking";
   show("Drafting…");
   $("copyBtn").classList.add("hidden");
+  const model = API_MODEL_IDS[settings.model] || settings.model;
   try {
     const resp = await fetch("https://api.anthropic.com/v1/messages", {
       method: "POST",
@@ -936,16 +946,15 @@ async function help(mode = "auto") {
         "content-type": "application/json",
       },
       body: JSON.stringify({
-        model: API_MODEL_IDS[settings.model] || settings.model,
-        max_tokens: 512, system: systemRules(mode),
+        model, max_tokens: 512 + (THINKING_HEADROOM[model] || 0), system: systemRules(mode),
         messages: [{ role: "user", content: buildUserPrompt(anchor, note, mode) }],
-        stream: true,
+        stream: true, ...API_MODEL_OPTIONS[model],
       }),
     });
     if (!resp.ok) throw new Error(resp.status + ": " + (await resp.text()).slice(0, 200));
     const reader = resp.body.getReader();
     const dec = new TextDecoder();
-    let buf = "", acc = "";
+    let buf = "", acc = "", refused = false;
     box.className = "answer";
     while (true) {
       const { done, value } = await reader.read();
@@ -962,10 +971,13 @@ async function help(mode = "auto") {
         if (ev.type === "content_block_delta" && ev.delta?.type === "text_delta") {
           acc += ev.delta.text;
           show(escapeHtml(acc));
+        } else if (ev.type === "message_delta" && ev.delta?.stop_reason === "refusal") {
+          refused = true;
         }
       }
     }
     if (ctl.signal.aborted) return;            // superseded by a newer press
+    if (refused && !acc) throw new Error("Claude declined to draft this one. Press Help again, or pick another model in Settings.");
     lastDraft = acc;
     if (acc) $("copyBtn").classList.remove("hidden");
     status(points ? "Talking points ready. Pick one and say it." : "Answer ready. Read it out.");

@@ -10,7 +10,7 @@ and every backend drafts in one of two modes:
 
 * ``ApiAssistant`` — the Anthropic API via the official SDK, streamed. Fast and
   consistent (no subprocess cold-start; separate quota). Configured for speed:
-  haiku/sonnet, thinking off.
+  thinking off on haiku and sonnet, kept short on opus.
 * ``CliAssistant`` — the authenticated ``claude`` CLI in single-shot mode. No API
   key needed; works with whatever auth Claude Code already has.
 * ``FallbackAssistant`` — wraps a primary and a secondary. Tries the primary; on
@@ -80,9 +80,19 @@ def system_rules(mode: str = "answer") -> str:
 # Friendly names the UI cycles through -> concrete API model IDs.
 API_MODEL_IDS = {
     "haiku": "claude-haiku-4-5",
-    "sonnet": "claude-sonnet-4-6",
-    "opus": "claude-opus-4-8",
+    "sonnet": "claude-sonnet-5-5",
+    "opus": "claude-opus-5-5",
 }
+
+# Per-model request settings, all for time to the first word. Haiku 4.5 does not
+# think unless asked. Sonnet 5.5 rejects disabled thinking; `between_tools` is its
+# thinking-off setting. Opus 5.5 always thinks, so it runs at low effort, and its
+# token cap gets headroom because the thinking counts toward max_tokens.
+API_MODEL_OPTIONS = {
+    "claude-sonnet-5-5": {"thinking": {"type": "between_tools"}},
+    "claude-opus-5-5": {"output_config": {"effort": "low"}},
+}
+THINKING_HEADROOM = {"claude-opus-5-5": 4096}
 
 # Default local LLM for the offline answer path (served by Ollama). One source of
 # truth so the model can be swapped in a single place. Qwen3 4B Instruct (2507) is
@@ -285,6 +295,11 @@ class ApiAssistant:
     def _model_id(self) -> str:
         return API_MODEL_IDS.get(self.model, self.model)
 
+    def _request(self, max_tokens: int) -> dict:
+        model = self._model_id()
+        return {"model": model, "max_tokens": max_tokens + THINKING_HEADROOM.get(model, 0),
+                **API_MODEL_OPTIONS.get(model, {})}
+
     def _ensure_client(self):
         if self._client is None:
             try:
@@ -304,10 +319,8 @@ class ApiAssistant:
                                  self.people)
         parts: list[str] = []
         try:
-            # No `thinking` param => thinking off on haiku/sonnet/opus: fastest path.
             with client.messages.stream(
-                model=self._model_id(),
-                max_tokens=self.max_tokens,
+                **self._request(self.max_tokens),
                 system=system_rules(mode),
                 messages=[{"role": "user", "content": user}],
             ) as stream:
@@ -315,6 +328,8 @@ class ApiAssistant:
                     parts.append(text)
                     if on_delta:
                         on_delta("".join(parts))
+                if stream.get_final_message().stop_reason == "refusal":
+                    raise AssistantError("API declined to draft this one")
         except AssistantError:
             raise
         except Exception as exc:  # SDK/network/auth errors -> trigger fallback
@@ -327,7 +342,7 @@ class ApiAssistant:
     def ping(self) -> str:
         client = self._ensure_client()
         msg = client.messages.create(
-            model=self._model_id(), max_tokens=16,
+            **self._request(16),
             messages=[{"role": "user", "content": "Reply with exactly the single word: PONG"}])
         return "".join(b.text for b in msg.content if getattr(b, "type", "") == "text").strip()
 
