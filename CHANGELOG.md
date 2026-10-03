@@ -6,6 +6,10 @@ extension carry their own version numbers, both noted per release.
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-10-03
+
+Extension 0.5.2, unchanged.
+
 ### Added
 - The terminal app runs on macOS and Windows as well as Linux. The microphone
   opens through AVFoundation on macOS and DirectShow on Windows (PulseAudio or

@@ -7,4 +7,4 @@ keypress (``h``) drafts what to say next for you to read aloud: a first-person
 answer if you were just asked something, talking points otherwise.
 """
 
-__version__ = "0.4.2"
+__version__ = "0.5.0"
