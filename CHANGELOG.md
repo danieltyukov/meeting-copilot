@@ -6,6 +6,22 @@ extension carry their own version numbers, both noted per release.
 
 ## [Unreleased]
 
+## [0.5.1] - 2026-10-11
+
+Extension 0.5.3. The terminal app is unchanged apart from its version.
+
+### Fixed
+- The extension could transcribe the wrong tab. Start captured whichever tab
+  was in front, so a tab Sparky had been opened on earlier (Spotify, say) was
+  heard instead of the call, and only your own voice reached the transcript.
+  Start now looks for the call page (Meet, Teams, Zoom web, Webex, Jitsi,
+  Whereby) first: the one in front, else the one making sound, else the one
+  you looked at last.
+- Pressing Alt+Shift+S, or clicking the Sparky icon, on the call tab now moves
+  a running recording onto that tab when the tab it holds is not a call. It
+  used to be ignored once any tab was captured, so the only way out was Stop
+  and Start. The panel also says when the tab it hears is not a call page.
+
 ## [0.5.0] - 2026-10-03
 
 Extension 0.5.2, unchanged.
