@@ -120,6 +120,7 @@ let sources = [];                             // [{ stop() }]
 let recording = false;                        // drives the "listening…" placeholder
 let micAttached = false;
 let tabAttached = false;
+let tabLeg = null;                            // { tabId, meeting, src }: the call tab being heard
 const frames = { me: 0, them: 0 };     // keyed by LEG, not by speaker
 const dgOpen = { me: false, them: false };
 const micState = { ok: false, msg: "" };      // mic is best-effort; tab audio is primary
@@ -623,7 +624,9 @@ function attach(leg, stream, opts) {
       onPartial: (segs) => setPartial(leg, segs), onFinal: (segs) => addFinal(leg, segs),
       onError: (m) => status(leg + ": " + m, true) }
   );
-  sources.push({ stop() { try { tap.stop(); } catch {} try { dg.close(); } catch {} } });
+  const src = { stop() { try { tap.stop(); } catch {} try { dg.close(); } catch {} } };
+  sources.push(src);
+  return src;
 }
 
 async function micPermissionState() {
@@ -646,11 +649,26 @@ async function attachTab(tabId) {
   const tab = await navigator.mediaDevices.getUserMedia({
     audio: { mandatory: { chromeMediaSource: "tab", chromeMediaSourceId: resp.streamId } },
   });
-  attach("them", tab, { playback: true, diarize: true });  // playback so you still hear the call
+  const src = attach("them", tab, { playback: true, diarize: true });  // playback so you still hear the call
   tabAttached = true;
+  tabLeg = { tabId: resp.tabId, meeting: !!resp.meeting, src };
   if (historyReady) noteSessionSource(resp.tabTitle);
   if (resp.tabId != null) watchRoster(resp.tabId);
-  status("Capturing: " + (resp.tabTitle || "active tab"));
+  status("Capturing: " + (resp.tabTitle || "active tab") + (resp.meeting ? "" :
+    ". Not a call page? On the call tab press Alt+Shift+S (or click the Sparky icon) to switch."));
+}
+// Let go of the call tab's audio, keeping the mic and the transcript.
+function detachTab() {
+  if (!tabLeg) return;
+  tabLeg.src.stop();
+  sources = sources.filter((s) => s !== tabLeg.src);
+  tabLeg = null;
+  tabAttached = false;
+  partials.them = [];
+  frames.them = 0;
+  dgOpen.them = false;
+  unwatchRoster();
+  setLevel("them", false);
 }
 function onTabCaptureFailed(e) {
   const msg = String(e.message || e);
@@ -665,7 +683,13 @@ function onTabCaptureFailed(e) {
 let tabAttaching = false;
 chrome.runtime.onMessage.addListener((msg) => {
   if (msg?.target !== "sidepanel" || msg.cmd !== "tabInvoked") return;
-  if (!recording || !hub || tabAttached || tabAttaching) return;
+  if (!recording || !hub || tabAttaching) return;
+  // Already hearing a tab: move to this one when it is another call page, or when
+  // the tab held is not a call at all (Start pressed with Spotify in front).
+  if (tabAttached) {
+    if (!tabLeg || tabLeg.tabId === msg.tabId || !(msg.meeting || !tabLeg.meeting)) return;
+    detachTab();
+  }
   tabAttaching = true;
   attachTab(msg.tabId).then(render, onTabCaptureFailed).finally(() => { tabAttaching = false; });
 });
@@ -718,6 +742,7 @@ async function start() {
   liveSessionId = historyReady ? beginSession({}).id : null;   // the tab title arrives below, once capture starts
   micAttached = false;
   tabAttached = false;
+  tabLeg = null;
   frames.me = 0; frames.them = 0;
   dgOpen.me = false; dgOpen.them = false;
   updateDiag();
@@ -745,6 +770,7 @@ async function stop() {
   hub = null;
   micAttached = false;
   tabAttached = false;
+  tabLeg = null;
   setState("stopped");
   updateDiag();
 
