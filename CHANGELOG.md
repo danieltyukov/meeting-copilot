@@ -6,6 +6,23 @@ extension carry their own version numbers, both noted per release.
 
 ## [Unreleased]
 
+## [0.5.2] - 2026-10-19
+
+Extension 0.5.4. The terminal app is unchanged apart from its version.
+
+### Added
+- A Microphone picker in the extension's Settings. Start opened the system
+  default input, which is not always the mic the call uses (a headset often
+  is not the default on Linux), so your voice went unheard while the panel
+  still counted frames. The pick is remembered, and changing it while
+  recording switches at once. A picked mic that is unplugged falls back to
+  the default.
+- Reconnect my mic and Reconnect the call, under the picker. Each drops one
+  capture leg and opens it again while recording, with no Stop and Start, so
+  the transcript, the names and the other leg carry on. Reconnect the call
+  stays on the call tab it holds, or looks for the call again when the tab it
+  holds is not one.
+
 ## [0.5.1] - 2026-10-11
 
 Extension 0.5.3. The terminal app is unchanged apart from its version.
