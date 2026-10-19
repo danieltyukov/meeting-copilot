@@ -71,6 +71,9 @@ async function createAudioHub() {
     sampleRate: ctx.sampleRate,
     state: () => ctx.state,
     usingWorklet: () => useWorklet,
+    // A Reconnect click is a fresh user gesture, so a context Chrome suspended
+    // mid-call can run again.
+    resume: () => ctx.resume().catch(() => {}),
 
     // opts: { playback: bool (route to speakers — true for tab so you still hear
     //         the call, false for mic so you don't echo), onLevel: (active)=>void }

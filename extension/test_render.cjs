@@ -1004,7 +1004,8 @@ check("answer box is rendered above the transcript",
   {
     let threw = null;
     try {
-      const O = makePanel({ store: { noticeAck: 2 }, missing: ["lvlMe", "lvlThem", "people", "myName", "noticeShow"] });
+      const O = makePanel({ store: { noticeAck: 2 }, missing: ["lvlMe", "lvlThem", "people", "myName", "noticeShow",
+        "micDevice", "micNote", "micRetry", "tabRetry"] });
       await tick();
       O.ctx.setState("recording");
       O.ctx.setLevel("me", true);
@@ -1013,6 +1014,89 @@ check("answer box is rendered above the transcript",
       check("…and still renders", /Sarah:<\/span> Hi, I&#39;m Sarah\./.test(O.T()), O.T());
     } catch (e) { threw = e; }
     check("an old page without the level dots, People row or new settings does not throw", !threw, threw && threw.message);
+  }
+
+  // 24) Reconnect. A leg not heard after Start is reopened in place, the mic
+  //     with the one picked in Settings, and the transcript carries on.
+  {
+    const R = makePanel({ store: { noticeAck: 2, micDeviceId: "usb-headset" } });
+    const asked = [];                            // getUserMedia constraints, in order
+    const stopped = [];                          // which addSource taps were stopped
+    let opened = 0;
+    const md = R.ctx.navigator.mediaDevices;
+    md.getUserMedia = async (c) => {
+      asked.push(JSON.parse(JSON.stringify(c)));
+      const id = c.audio && c.audio.deviceId && c.audio.deviceId.exact;
+      if (id === "gone") throw Object.assign(new Error("no such device"), { name: "OverconstrainedError" });
+      const label = c.audio.mandatory ? "tab" : id === "usb-headset" ? "USB Headset" : id === "builtin" ? "Built-in Mic" : "Default mic";
+      return { getAudioTracks: () => [{ label }], getTracks: () => [] };
+    };
+    md.enumerateDevices = async () => [
+      { kind: "audioinput", deviceId: "default", label: "Default" },
+      { kind: "audioinput", deviceId: "builtin", label: "Built-in Mic" },
+      { kind: "audioinput", deviceId: "usb-headset", label: "USB Headset" },
+      { kind: "audiooutput", deviceId: "spk", label: "Speakers" },
+    ];
+    const tabAsks = [];
+    let busyOnce = false;
+    R.ctx.chrome.runtime.sendMessage = async (m) => {
+      tabAsks.push(m);
+      if (busyOnce) { busyOnce = false; return { ok: false, error: "Cannot capture a tab with an active stream." }; }
+      return { ok: true, streamId: "s" + tabAsks.length, tabTitle: "Teams call", tabId: 7, meeting: true };
+    };
+    R.ctx.createAudioHub = async () => ({
+      sampleRate: 48000, state: () => "running", usingWorklet: () => true, resume() {}, close() {},
+      addSource: () => { const n = ++opened; return { stop() { stopped.push(n); } }; },
+    });
+    await tick();
+    vm.runInContext("settings.deepgramKey = 'dg_test'", R.ctx);
+    const micAsks = () => asked.filter((c) => !c.audio.mandatory);
+    const lastMic = () => micAsks()[micAsks().length - 1].audio.deviceId;
+
+    await R.ctx.start();
+    check("Start opens the mic picked in Settings", JSON.stringify(lastMic()) === '{"exact":"usb-headset"}', JSON.stringify(asked));
+    check("…and names it under the picker", /Hearing you on: USB Headset/.test(R.els.micNote._text), R.els.micNote._text);
+    const opts = R.els.micDevice._html;
+    check("the picker lists the inputs, not the default alias or the speakers",
+      /Built-in Mic/.test(opts) && /USB Headset/.test(opts) && !/>Default</.test(opts) && !/Speakers/.test(opts), opts);
+    check("…with the picked mic selected", R.els.micDevice.value === "usb-headset", R.els.micDevice.value);
+
+    R.ctx.addFinal("them", [{ speaker: 0, text: "Can you hear me now?" }]);
+    R.els.micDevice.value = "builtin";
+    fire(R.els.micDevice, "change", {});
+    await tick();
+    check("picking another mic mid-call drops the old one", stopped.includes(1), JSON.stringify(stopped));
+    check("…opens the new one", JSON.stringify(lastMic()) === '{"exact":"builtin"}', JSON.stringify(lastMic()));
+    check("…remembers it", R.store.micDeviceId === "builtin", R.store.micDeviceId);
+    check("…leaves the call leg alone and keeps the transcript",
+      !stopped.includes(2) && /Can you hear me now\?/.test(R.T()), JSON.stringify(stopped));
+    check("…and says which mic is live", /Built-in Mic/.test(R.els.status._text), R.els.status._text);
+
+    fire(R.els.micRetry, "click", {});
+    await tick();
+    check("Reconnect my mic reopens the same mic", stopped.includes(3) && JSON.stringify(lastMic()) === '{"exact":"builtin"}',
+      JSON.stringify(stopped));
+
+    busyOnce = true;
+    tabAsks.length = 0;
+    await R.ctx.reconnectTab();
+    check("Reconnect the call drops the tab leg and captures the same call tab again",
+      stopped.includes(2) && tabAsks.length === 2 && tabAsks.every((m) => m.tabId === 7), JSON.stringify(tabAsks));
+    check("…waiting out Chrome's hold on the capture just stopped", /Capturing: Teams call/.test(R.els.status._text), R.els.status._text);
+    check("…keeping the mic and the transcript", !stopped.includes(4) && /Can you hear me now\?/.test(R.T()));
+
+    await R.ctx.stop();
+    const before = asked.length;
+    await R.ctx.reconnectMic();
+    check("Reconnect while stopped says to Start, and opens nothing",
+      asked.length === before && /Press Start first/.test(R.els.status._text), R.els.status._text);
+
+    vm.runInContext("settings.micDeviceId = 'gone'", R.ctx);
+    await R.ctx.start();
+    check("a picked mic that is unplugged falls back to the default",
+      vm.runInContext("micAttached", R.ctx) && lastMic() === undefined && /Default mic/.test(R.els.micNote._text),
+      R.els.micNote._text);
+    await R.ctx.stop();
   }
 
   console.log("\n" + (failures ? `${failures} FAIL` : "all passed") + "\n");

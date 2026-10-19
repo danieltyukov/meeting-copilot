@@ -63,8 +63,16 @@
         <textarea id="context" rows="6" aria-label="Your context" placeholder="Paste anything useful: your CV, the project or repo summary, the job description, what you want to bring up..."></textarea>
       </details>
 
-      <details class="fold settings">
-        <summary><span class="fold-name">Settings</span><span class="fold-hint">keys, model, your name</span></summary>
+      <details class="fold settings" id="settingsBox">
+        <summary><span class="fold-name">Settings</span><span class="fold-hint">audio, keys, model, your name</span></summary>
+        <label>Microphone
+          <select id="micDevice"><option value="">System default</option></select>
+        </label>
+        <p id="micNote" class="field-note">If your voice is not picked up, pick the mic your call uses. While recording it switches at once.</p>
+        <div class="fix-row">
+          <button id="micRetry" class="chip" title="Reopen your microphone, keeping the transcript">Reconnect my mic</button>
+          <button id="tabRetry" class="chip" title="Recapture the call tab's audio, keeping the transcript">Reconnect the call</button>
+        </div>
         <label>Your name <span class="opt">optional</span>
           <input id="myName" type="text" autocomplete="name" spellcheck="false" placeholder="e.g. Daniel">
         </label>

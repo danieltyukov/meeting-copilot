@@ -177,6 +177,12 @@ recording with no text yet, the panel tells you exactly what it is hearing:
   the mic binds to the recording already in progress (no Stop/Start round trip,
   and nothing already transcribed is lost). Until that succeeds your own voice
   has no channel of its own, which is why it can end up attributed to the call.
+- **The `you` or `them` dot stays grey while you talk, or they do.** Open
+  **Settings**. If it is your voice, pick the mic your call uses under
+  **Microphone** (the system default is often not the headset); while
+  recording it switches at once. **Reconnect my mic** and **Reconnect the
+  call** reopen one source each without stopping the recording, so nothing
+  already transcribed is lost.
 
 **Definitive 30-second self-test (no call needed):** open any tab playing speech,
 for example a talking **YouTube** video, focus that tab, open the side panel,

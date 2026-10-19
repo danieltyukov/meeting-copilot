@@ -51,7 +51,8 @@ by name when known (address them by it when that is natural), otherwise "Speaker
 function systemRules(mode) { return mode === "points" ? POINTS_RULES : ANSWER_RULES; }
 
 const $ = (id) => document.getElementById(id);
-const settings = { deepgramKey: "", anthropicKey: "", model: "sonnet", language: "en", context: "", myName: "" };
+// micDeviceId: "" is the system default. Set only by the Microphone picker.
+const settings = { deepgramKey: "", anthropicKey: "", model: "sonnet", language: "en", context: "", myName: "", micDeviceId: "" };
 
 // Everything this panel borrows from history.js. A side panel that Chrome kept
 // alive across an extension reload still runs the document it was opened with, so
@@ -119,6 +120,8 @@ let hub = null;
 let sources = [];                             // [{ stop() }]
 let recording = false;                        // drives the "listening…" placeholder
 let micAttached = false;
+let micLeg = null;                            // { stop() }: the mic being heard
+let micLabel = "";                            // that mic's device name, once Chrome gives it
 let tabAttached = false;
 let tabLeg = null;                            // { tabId, meeting, src }: the call tab being heard
 const frames = { me: 0, them: 0 };     // keyed by LEG, not by speaker
@@ -236,6 +239,7 @@ async function loadSettings() {
   $("language").value = settings.language || "en";
   $("context").value = settings.context || "";
   if ($("myName")) $("myName").value = settings.myName || "";
+  listMics();
 }
 async function saveSettings() {
   Object.assign(settings, {
@@ -694,19 +698,60 @@ chrome.runtime.onMessage.addListener((msg) => {
   attachTab(msg.tabId).then(render, onTabCaptureFailed).finally(() => { tabAttaching = false; });
 });
 
+// ---- which microphone ----
+// The system default is not always the mic the call uses (a headset is often not
+// the default source on Linux), and then "you" stays silent while its frames
+// still flow. Device names are only readable once the mic has been granted.
+const MIC_HINT = "If your voice is not picked up, pick the mic your call uses. While recording it switches at once.";
+async function listMics() {
+  const sel = $("micDevice");
+  const md = navigator.mediaDevices;
+  if (!sel || !md || typeof md.enumerateDevices !== "function") return;
+  let mics;
+  try {
+    mics = (await md.enumerateDevices())
+      .filter((d) => d.kind === "audioinput" && d.deviceId && d.deviceId !== "default");
+  } catch { return; }
+  const want = settings.micDeviceId || "";
+  const opts = ['<option value="">System default</option>'];
+  mics.forEach((d, i) => opts.push(`<option value="${escapeHtml(d.deviceId)}">${escapeHtml(d.label || "Microphone " + (i + 1))}</option>`));
+  // A mic picked before and unplugged now stays picked, for when it is back.
+  if (want && !mics.some((d) => d.deviceId === want)) opts.push(`<option value="${escapeHtml(want)}">Picked mic (not connected)</option>`);
+  sel.innerHTML = opts.join("");
+  sel.value = want;
+}
+function showMic() {
+  const el = $("micNote");
+  if (el) el.textContent = micAttached && micLabel ? `Hearing you on: ${micLabel}. ${MIC_HINT}` : MIC_HINT;
+}
+function micConstraints(deviceId) {
+  const c = { echoCancellation: true, noiseSuppression: true, autoGainControl: true };
+  if (deviceId) c.deviceId = { exact: deviceId };
+  return c;
+}
+
 // echoCancellation earns its keep when you're on speakers: without it the mic
 // re-hears the call and every line from the far end lands twice.
 async function attachMic() {
   if (micAttached) return true;
   micState.ok = false; micState.msg = "";
   try {
-    const mic = await navigator.mediaDevices.getUserMedia({
-      audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
-    });
-    attach("me", mic, { playback: false, diarize: false });
+    let mic;
+    try {
+      mic = await navigator.mediaDevices.getUserMedia({ audio: micConstraints(settings.micDeviceId) });
+    } catch (e) {
+      // The picked mic is unplugged: the default beats no mic at all.
+      if (!settings.micDeviceId || !/Overconstrained|NotFound/.test(e.name)) throw e;
+      mic = await navigator.mediaDevices.getUserMedia({ audio: micConstraints("") });
+    }
+    micLeg = attach("me", mic, { playback: false, diarize: false });
     micAttached = true;
     micState.ok = true;
+    const track = mic.getAudioTracks ? mic.getAudioTracks()[0] : null;
+    micLabel = (track && track.label) || "";
     $("micBtn").classList.add("hidden");
+    showMic();
+    listMics();                                // the names are readable now
     return true;
   } catch (e) {
     // Chrome won't show the mic prompt in a side panel, so point at the helper.
@@ -716,6 +761,66 @@ async function attachMic() {
     $("micBtn").classList.remove("hidden");
     return false;
   }
+}
+// Let go of the mic, keeping the call tab and the transcript.
+function detachMic() {
+  if (micLeg) {
+    micLeg.stop();
+    sources = sources.filter((s) => s !== micLeg);
+  }
+  micLeg = null;
+  micAttached = false;
+  micState.ok = false;
+  micLabel = "";
+  partials.me = [];
+  frames.me = 0;
+  dgOpen.me = false;
+  setLevel("me", false);
+  showMic();
+}
+
+// ---- reconnect ----
+// For a leg that is not heard after Start: drop it and open it again, with no
+// Stop and Start, so the transcript, the names and the other leg carry on.
+async function reconnectMic() {
+  if (!recording || !hub) return status("Press Start first. Start opens the mic picked here.");
+  if (hub.resume) hub.resume();
+  detachMic();
+  updateDiag();
+  if (await attachMic()) status("Mic reconnected" + (micLabel ? ": " + micLabel : "") + ". Speak and watch the you dot.");
+  else status("Mic off: " + micState.msg, true);
+  render();
+}
+async function reconnectTab() {
+  if (!recording || !hub) return status("Press Start first.");
+  if (tabAttaching) return;
+  tabAttaching = true;
+  if (hub.resume) hub.resume();
+  // Stay on the tab held when it is a call; otherwise look for the call again.
+  const keep = tabLeg && tabLeg.meeting ? tabLeg.tabId : undefined;
+  detachTab();
+  updateDiag();
+  status("Reconnecting the call...");
+  try {
+    // Chrome can take a moment to release the capture just stopped on that tab.
+    for (let i = 0; ; i++) {
+      try { await attachTab(keep); break; } catch (e) {
+        if (i >= 3 || !/active stream/i.test(String(e.message || e))) throw e;
+        await new Promise((r) => setTimeout(r, 300));
+      }
+    }
+    render();
+  } catch (e) {
+    onTabCaptureFailed(e);
+  } finally {
+    tabAttaching = false;
+  }
+}
+async function onMicPick() {
+  settings.micDeviceId = $("micDevice").value;
+  try { await chrome.storage.local.set({ micDeviceId: settings.micDeviceId }); } catch {}
+  if (recording && hub) await reconnectMic();
+  else status("Saved. Start opens this mic.");
 }
 
 async function start() {
@@ -741,6 +846,7 @@ async function start() {
   editing = null;
   liveSessionId = historyReady ? beginSession({}).id : null;   // the tab title arrives below, once capture starts
   micAttached = false;
+  micLeg = null;
   tabAttached = false;
   tabLeg = null;
   frames.me = 0; frames.them = 0;
@@ -769,6 +875,9 @@ async function stop() {
   try { hub && hub.close(); } catch {}
   hub = null;
   micAttached = false;
+  micLeg = null;
+  micLabel = "";
+  showMic();
   tabAttached = false;
   tabLeg = null;
   setState("stopped");
@@ -1065,6 +1174,12 @@ on("helpBtn", "click", () => help());
 on("copyBtn", "click", copyDraft);
 document.addEventListener("keydown", onShortcut);
 on("micBtn", "click", onMicBtn);
+on("micDevice", "change", onMicPick);
+on("micRetry", "click", reconnectMic);
+on("tabRetry", "click", reconnectTab);
+if (navigator.mediaDevices && navigator.mediaDevices.addEventListener) {
+  navigator.mediaDevices.addEventListener("devicechange", listMics);   // a headset plugged in mid-call
+}
 on("saveBtn", "click", saveSettings);
 on("context", "change", saveSettings);
 on("myName", "change", saveSettings);

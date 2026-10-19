@@ -226,6 +226,7 @@ button.person.add:hover { color: var(--text); border-color: var(--line-strong); 
 .field-note { margin: -4px 0 12px; font-size: 12px; color: var(--muted); }
 .pair { display: grid; grid-template-columns: 1fr 92px; gap: 10px; }
 .save-row { display: flex; align-items: center; gap: 10px; }
+.fix-row { display: flex; flex-wrap: wrap; gap: 6px; margin: -4px 0 14px; }
 
 /* ---- controls ---- */
 input[type=text], input[type=password], textarea, select {
