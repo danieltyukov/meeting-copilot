@@ -17,7 +17,7 @@ chrome.action.onClicked.addListener(async (tab) => {
 // Call pages. Start looks for one of these before falling back to the tab in
 // front: Start pressed while Spotify was in front used to transcribe Spotify.
 const CALL_URL = new RegExp("^https://(" + [
-  "meet\\.google\\.com/[a-z]{3}-[a-z]{4}-[a-z]{3}",
+  "meet\\.google\\.com/(meet/)?[a-z]{3}-[a-z]{4}-[a-z]{3}",   // /meet/ prefix: links opened with ?authuser=
   "teams\\.microsoft\\.com/", "teams\\.live\\.com/", "teams\\.cloud\\.microsoft/",
   "([\\w-]+\\.)?zoom\\.us/wc/", "[\\w-]+\\.webex\\.com/", "meet\\.jit\\.si/", "whereby\\.com/",
 ].join("|") + ")", "i");
