@@ -183,6 +183,17 @@ recording with no text yet, the panel tells you exactly what it is hearing:
   recording it switches at once. **Reconnect my mic** and **Reconnect the
   call** reopen one source each without stopping the recording, so nothing
   already transcribed is lost.
+- **The transcript stops while people are still talking.** A source's Deepgram
+  stream ended under the call: a network hiccup, or Deepgram closing a stream
+  it stopped receiving audio from. Sparky opens a new one on its own and
+  resends the audio since the last finished line, so the text picks up where
+  it stopped, trailing for a moment while it catches up. The status line says
+  when this happens and why. The footer keeps score per source: `dg ok` while
+  its stream is open, `dg ..` while it is being reopened, how many times it
+  dropped, and `5s behind` when your connection uploads slower than the audio.
+  A new stream cannot tell who is who, so on a call with several voices the
+  speakers come back with new numbers: click a chip to name one again. A 1:1
+  keeps its name.
 
 **Definitive 30-second self-test (no call needed):** open any tab playing speech,
 for example a talking **YouTube** video, focus that tab, open the side panel,

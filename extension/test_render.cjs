@@ -142,9 +142,13 @@ const tick = (ms = 20) => new Promise((r) => setTimeout(r, ms));
 
 // ---- WebSocket shim (captures the last instance so we can feed it frames) ----
 let lastWS = null;
+const allWS = [];                              // every socket opened, in order: a reconnect shows up as one more
 class FakeWS {
-  constructor(url, protocols) { this.url = url; this.protocols = protocols; this.readyState = 0; lastWS = this; }
-  send() {}
+  constructor(url, protocols) {
+    this.url = url; this.protocols = protocols; this.readyState = 0; this.sent = [];
+    lastWS = this; allWS.push(this);
+  }
+  send(data) { this.sent.push(data); }
   close() { this.readyState = 3; if (this.onclose) this.onclose(); }
 }
 FakeWS.OPEN = 1;
@@ -1097,6 +1101,186 @@ check("answer box is rendered above the transcript",
       vm.runInContext("micAttached", R.ctx) && lastMic() === undefined && /Default mic/.test(R.els.micNote._text),
       R.els.micNote._text);
     await R.ctx.stop();
+  }
+
+  // 25) A Deepgram stream that ends mid-call. Deepgram closes a stream it has
+  //     had no audio from for about 12 s with a clean close frame (code 1011),
+  //     and a network drop ends one too. The panel used to carry on counting
+  //     frames under "dg ok" with the last partial frozen on screen. The leg
+  //     must say so, open a new stream, and resend what the old one never
+  //     finished, so the transcript carries on with nothing missing or doubled.
+  {
+    const FRAME = 4096;                          // one worklet batch: 2048 samples of 16-bit mono
+    // A panel that has pressed Start, with both legs attached to a fake hub.
+    async function recordingPanel() {
+      const K = makePanel({ store: { noticeAck: 2 } });
+      await tick();
+      const clock = vm.runInContext("Date", K.ctx);
+      const realNow = clock.now;
+      let skew = 0;
+      clock.now = () => realNow() + skew;
+      const taps = {};                           // leg -> the callback the hub hands PCM to
+      K.ctx.navigator.mediaDevices.getUserMedia = async (c) => (
+        { leg: c.audio.mandatory ? "them" : "me", getAudioTracks: () => [{ label: "mic" }], getTracks: () => [] });
+      K.ctx.chrome.runtime.sendMessage = async () => ({ ok: true, streamId: "s", tabTitle: "Meet - weekly", tabId: 9, meeting: true });
+      K.ctx.createAudioHub = async () => ({
+        sampleRate: 48000, state: () => "running", usingWorklet: () => true, resume() {}, close() {},
+        addSource: (stream, onPcm) => { taps[stream.leg] = onPcm; return { stop() {} }; },
+      });
+      vm.runInContext("settings.deepgramKey = 'dg_test'", K.ctx);
+      const from = allWS.length;
+      await K.ctx.start();
+      const socks = () => allWS.slice(from);
+      const [me, them] = socks();
+      return {
+        K, me, them, socks,
+        open(ws) { ws.readyState = 1; ws.onopen(); },
+        pump(leg, n = 1) { for (let i = 0; i < n; i++) taps[leg](new ArrayBuffer(FRAME)); },
+        skip(ms) { skew += ms; },
+        drop(ws, code, reason) { ws.readyState = 3; ws.onclose({ code, reason: reason || "", wasClean: code !== 1006 }); },
+        diag: () => K.els.diag._text, said: () => K.els.status._text,
+      };
+    }
+    // A Results frame with the stream times real ones carry.
+    const result = (ws, speaker, text, o) => ws.onmessage({ data: JSON.stringify({
+      type: "Results", is_final: !!o.final, speech_final: !!o.end, start: o.start, duration: o.dur,
+      channel: { alternatives: [{ transcript: text.toLowerCase(), words: diarizedWords([[speaker, text]]) }] } }) });
+    const bytes = (ws) => ws.sent.reduce((n, d) => n + (typeof d === "string" ? 0 : d.byteLength), 0);
+    const NET0001 = "Deepgram did not receive audio data or a text message within the timeout window. See https://dpgr.am/net0001";
+
+    const A = await recordingPanel();
+    A.open(A.me); A.open(A.them);
+    check("(setup) the call leg is the diarized stream", /diarize=true/.test(A.them.url) && !/diarize/.test(A.me.url), A.them.url);
+    A.pump("me", 100); A.pump("them", 100);      // 4.27 s of call audio
+    result(A.them, 0, "On our platform we connect them", { final: true, end: true, start: 0, dur: 2 });
+    result(A.them, 1, "Right, and then?", { final: true, end: true, start: 2, dur: 0.5 });
+    result(A.them, 0, "with potential partners", { final: true, start: 2.5, dur: 0.5 });   // final, utterance still open
+    result(A.them, 0, "that could build", { start: 3, dur: 1 });                           // interim
+    check("(setup) a partial is on screen", /with potential partners that could build ▌/.test(A.K.T()), A.K.T());
+    check("(setup) both legs report dg ok", /you 100f dg ok/.test(A.diag()) && /them 100f dg ok/.test(A.diag()), A.diag());
+
+    A.drop(A.them, 1011, NET0001);
+    check("a dropped stream commits the words that were already final",
+      /Speaker 1:<\/span> with potential partners<\/div>/.test(A.K.T()), A.K.T());
+    check("…and takes the frozen partial off the screen", !/▌/.test(A.K.T()) && !/that could build/.test(A.K.T()), A.K.T());
+    check("the drop is reported, with Deepgram's reason",
+      /dropped/.test(A.said()) && /1011/.test(A.said()) && /did not receive audio/.test(A.said())
+        && A.K.els.status.classList.contains("err"), A.said());
+    check("the footer stops saying dg ok for that leg", /them 100f dg \.\./.test(A.diag()), A.diag());
+    check("…and leaves the other leg as it is", /you 100f dg ok/.test(A.diag()) && A.socks().length === 2, A.diag());
+
+    A.pump("them");                              // the next audio frame opens a new stream
+    const again = A.socks()[2];
+    check("the next audio frame opens a new stream for that leg",
+      A.socks().length === 3 && /diarize=true/.test(again.url), String(A.socks().length));
+    check("…and holds its audio until that stream is open", bytes(again) === 0, String(bytes(again)));
+    A.open(again);
+    // 101 frames captured; results were final up to 3.0 s = 288000 bytes.
+    check("once open it is sent everything since the last final result, and nothing before",
+      bytes(again) === 101 * FRAME - 288000, `${bytes(again)} != ${101 * FRAME - 288000}`);
+    check("the footer says dg ok again, and counts the drop", /them 101f dg ok, 1 drop/.test(A.diag()), A.diag());
+    check("…and the status says the call is back", /call is back/.test(A.said()) && !A.K.els.status.classList.contains("err"), A.said());
+    const before = bytes(again);
+    A.pump("them");
+    check("live audio goes to the new stream", bytes(again) === before + FRAME, String(bytes(again) - before));
+
+    // A new stream numbers its voices from 0 again, in the order they next
+    // speak. Two voices were heard before the drop, so index 0 need not be who
+    // it was: the voice gets a number of its own rather than the wrong label.
+    result(again, 0, "that could build chips for them.", { final: true, end: true, start: 0, dur: 2 });
+    check("after a reconnect with several voices heard, a voice does not inherit an old index",
+      /Speaker 3:<\/span> that could build chips for them\./.test(A.K.T()), A.K.T());
+    check("…and the lines from before keep their labels",
+      /Speaker 1:<\/span> On our platform we connect them/.test(A.K.T()) && /Speaker 2:<\/span> Right, and then\?/.test(A.K.T()), A.K.T());
+
+    again.bufferedAmount = 5 * 96000;            // 5 s of audio Chrome has not got onto the wire
+    A.pump("them", 10);
+    check("audio queued behind a slow uplink shows in the footer", /them \d+f dg ok, 1 drop[^·]*5s behind/.test(A.diag()), A.diag());
+
+    // Stop is not a drop.
+    await A.K.ctx.stop();
+    const sockets = A.socks().length;
+    A.pump("them", 3); A.pump("me", 3);
+    check("Stop closes the streams for good", A.socks().length === sockets && !/dropped/.test(A.said()), A.said());
+
+    // A 1:1 call: one voice heard, so the new stream's first voice is that person.
+    const B = await recordingPanel();
+    B.open(B.me); B.open(B.them);
+    B.pump("them", 50);
+    result(B.them, 0, "Hi, I'm Sarah, thanks for making time.", { final: true, end: true, start: 0, dur: 2 });
+    B.drop(B.them, 1006);
+    check("a lost connection is reported in plain words", /dropped \(connection lost\)/.test(B.said()), B.said());
+    B.pump("them", 101);                         // 4.3 s go by before the new stream is open
+    check("audio that comes in while reconnecting opens one stream, not many", B.socks().length === 3, String(B.socks().length));
+    B.open(B.socks()[2]);
+    // 151 frames captured, final up to 2 s = 192000 bytes: 4.44 s to work through.
+    check("the status says how far behind the new stream starts",
+      /call is back, catching up on the last 4 s\.$/.test(B.said()), B.said());
+    result(B.socks()[2], 0, "Shall we start?", { final: true, end: true, start: 0, dur: 1 });
+    check("after a reconnect on a 1:1 the one voice keeps its name",
+      /Sarah:<\/span> Shall we start\?/.test(B.K.T()) && !/Speaker 2/.test(B.K.T()), B.K.T());
+
+    // A gap longer than the 30 s of audio held: the newest 30 s are resent, and
+    // the status owns up to the rest.
+    const G = await recordingPanel();
+    G.open(G.me); G.open(G.them);
+    G.pump("them", 50);
+    result(G.them, 0, "One moment.", { final: true, end: true, start: 0, dur: 2 });
+    G.drop(G.them, 1006);
+    G.pump("them", 800);                         // 34 s while the new stream connects
+    G.open(G.socks()[2]);
+    // 30 s is 703 whole frames; the 4.27 s between the last final and those are gone.
+    check("a gap longer than the audio held resends the newest 30 s", bytes(G.socks()[2]) === 703 * FRAME, String(bytes(G.socks()[2])));
+    check("…and says what could not be recovered",
+      /catching up on the last 30 s\. About 4 s before that could not be recovered\.$/.test(G.said()), G.said());
+
+    // A stream that stays open but stops answering. Deepgram replies about once
+    // a second while audio flows, so 10 s of audio with no reply is a dead link.
+    const C = await recordingPanel();
+    C.open(C.me); C.open(C.them);
+    C.pump("them", 10);
+    result(C.them, 0, "Can you hear me?", { final: true, end: true, start: 0, dur: 0.4 });
+    for (let i = 0; i < 9; i++) { C.skip(1000); C.pump("them"); }
+    check("9 s without a reply is not yet a stall", C.socks().length === 2 && !/dropped/.test(C.said()), C.said());
+    for (let i = 0; i < 3; i++) { C.skip(1000); C.pump("them"); }
+    check("audio flowing for over 10 s with no reply reconnects the leg",
+      C.socks().length === 3 && /dropped \(no reply for 10 s\)/.test(C.said()), `${C.socks().length} ${C.said()}`);
+
+    // The same for a new stream that never finishes connecting.
+    for (let i = 0; i < 5; i++) { C.skip(1000); C.pump("them"); }
+    check("(setup) the new stream is still connecting 5 s on", C.socks().length === 3, String(C.socks().length));
+    for (let i = 0; i < 7; i++) { C.skip(1000); C.pump("them"); }
+    check("a reconnect that hangs for 10 s is given up for another try", C.socks().length === 4, String(C.socks().length));
+
+    // …but a pause in the audio itself (the context suspended) is not a stall.
+    const E = await recordingPanel();
+    E.open(E.me); E.open(E.them);
+    E.pump("them", 10);
+    result(E.them, 0, "Back in a second.", { final: true, end: true, start: 0, dur: 0.4 });
+    E.skip(30000);
+    E.pump("them", 5);
+    check("audio that itself paused does not count as a stall", E.socks().length === 2 && !/dropped/.test(E.said()), E.said());
+
+    // A stream that never opens (a wrong key): a few tries, spaced out, then
+    // the error it always gave, and no more sockets.
+    const F = await recordingPanel();
+    F.open(F.them);
+    F.drop(F.me, 1006);
+    F.pump("me");
+    check("a connect that fails is tried again at once", F.socks().length === 3, String(F.socks().length));
+    F.drop(F.socks()[2], 1006);
+    F.pump("me");
+    check("…the next try waits", F.socks().length === 3, String(F.socks().length));
+    F.skip(600);
+    F.pump("me");
+    check("…half a second", F.socks().length === 4, String(F.socks().length));
+    F.drop(F.socks()[3], 1006);
+    check("a stream that never opened gives up with the key and network hint",
+      /me: Deepgram connection error \(check the key \/ network\)/.test(F.said()) && F.K.els.status.classList.contains("err"), F.said());
+    F.skip(60000);
+    F.pump("me", 3);
+    check("…and stops trying", F.socks().length === 4, String(F.socks().length));
+    check("…while the other leg carries on", /them \d+f dg ok/.test(F.diag()) || /them 0f dg ok/.test(F.diag()), F.diag());
   }
 
   console.log("\n" + (failures ? `${failures} FAIL` : "all passed") + "\n");

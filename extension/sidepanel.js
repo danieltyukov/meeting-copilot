@@ -125,16 +125,27 @@ let micLabel = "";                            // that mic's device name, once Ch
 let tabAttached = false;
 let tabLeg = null;                            // { tabId, meeting, src }: the call tab being heard
 const frames = { me: 0, them: 0 };     // keyed by LEG, not by speaker
-const dgOpen = { me: false, them: false };
+const dgOpen = { me: false, them: false };    // the leg's Deepgram stream is open right now
+const dgDrops = { me: 0, them: 0 };           // times that stream ended under the call, this session
+const dgLink = { me: null, them: null };      // the leg's Deepgram client
+const LEG_NAME = { me: "your mic", them: "the call" };
 const micState = { ok: false, msg: "" };      // mic is best-effort; tab audio is primary
 
+// "dg ok" only while the stream is open, then what a frozen transcript would
+// otherwise hide: how often it dropped, and audio queued behind a slow uplink.
+function linkDiag(leg) {
+  let s = dgOpen[leg] ? "dg ok" : "dg ..";
+  if (dgDrops[leg]) s += `, ${dgDrops[leg]} drop${dgDrops[leg] > 1 ? "s" : ""}`;
+  const behind = dgLink[leg] && dgLink[leg].behindSeconds ? dgLink[leg].behindSeconds() : 0;
+  if (behind >= 2) s += `, ${behind}s behind`;
+  return s;
+}
 function updateDiag() {
   const st = hub ? hub.state() : "-";
   const rate = hub ? hub.sampleRate : "?";
   const cap = hub && hub.usingWorklet ? (hub.usingWorklet() ? "worklet" : "scriptproc") : "-";
   $("diag").textContent =
-    `ctx:${st}@${rate}Hz ${cap} · you ${frames.me}f ${dgOpen.me ? "dg ok" : "dg .."} · ` +
-    `them ${frames.them}f ${dgOpen.them ? "dg ok" : "dg .."}`;
+    `ctx:${st}@${rate}Hz ${cap} · you ${frames.me}f ${linkDiag("me")} · them ${frames.them}f ${linkDiag("them")}`;
 }
 
 // ---- speaker identity ----
@@ -145,7 +156,21 @@ function updateDiag() {
 // transcript labels itself exactly like the live one.
 function speakerKey(leg, speaker) {
   if (leg === "me") return "me";
-  return "int:" + (typeof speaker === "number" ? speaker : 0);
+  return "int:" + (voiceBase + (typeof speaker === "number" ? speaker : 0));
+}
+// A new Deepgram stream (a reconnect, or the call tab captured again) numbers
+// its voices from 0 again, in the order they next speak, so index 0 need not be
+// who it was. With one voice heard on a call of one other person at most, it
+// is: that voice keeps its key and its name. Otherwise the new stream's voices
+// get keys of their own, to be named again by introduction, elimination or
+// hand, rather than inherit a name that belongs to someone else.
+let voiceBase = 0;                            // added to Deepgram's index for the stream being heard
+function voiceIndex(key) { return Number(key.slice(4)); }
+function newVoiceRange() {
+  const all = Object.keys(speakerOrdinals).map(voiceIndex);
+  const current = all.filter((i) => i >= voiceBase);
+  if (!current.length || (current.length === 1 && rosterNow().length <= 1)) return;
+  voiceBase = Math.max(...all) + 1;
 }
 function registerSpeaker(key) {
   if (key !== "me" && !(key in speakerOrdinals)) speakerOrdinals[key] = Object.keys(speakerOrdinals).length + 1;
@@ -191,7 +216,9 @@ function rosterNow() {
 // Elimination: once every other voice but one is accounted for and one name is
 // left, they go together. It never guesses between two (names.js eliminate).
 function applyRoster() {
-  const voices = speakersHeard(utterances, speakerOrdinals).filter((k) => k !== "me");
+  // Only the voices of the stream being heard: ones from before a reconnect
+  // are the same people under old keys, and would be counted twice.
+  const voices = speakersHeard(utterances, speakerOrdinals).filter((k) => k !== "me" && voiceIndex(k) >= voiceBase);
   for (const [key, name] of Object.entries(eliminate(voices, speakerNames, rosterNow()))) {
     if (declined.has(key)) continue;
     speakerNames[key] = name;
@@ -621,13 +648,34 @@ function attach(leg, stream, opts) {
       if (!utterances.length && !partials.me.length && !partials.them.length) render();
     }
   }, { playback: opts.playback, onLevel: (a) => setLevel(leg, a) });
+  if (leg === "them") newVoiceRange();         // a stream of its own, whatever was heard before
+  // The stream is kept up by deepgram.js: one that ends under the call is
+  // reopened and caught up. Here that is reported, and the footer kept honest.
   dg = openDeepgram(
     { key: settings.deepgramKey, model: "nova-3", language: settings.language,
       sampleRate: hub.sampleRate, diarize: opts.diarize },
-    { onOpen: () => { dgOpen[leg] = true; updateDiag(); },
+    { onOpen: (o) => {
+        dgOpen[leg] = true;
+        if (o && o.resumed) {
+          if (leg === "them") newVoiceRange();
+          const held = o.heldMs >= 2000 ? `, catching up on the last ${Math.round(o.heldMs / 1000)} s` : "";
+          const lost = o.lostMs >= 1000 ? ` About ${Math.round(o.lostMs / 1000)} s before that could not be recovered.` : "";
+          status(`Transcription of ${LEG_NAME[leg]} is back${held}.${lost}`);
+        }
+        updateDiag();
+      },
+      onDown: (why, o) => {
+        dgOpen[leg] = false;
+        if (o && o.wasOpen) dgDrops[leg]++;
+        updateDiag();
+        status(o && o.wasOpen
+          ? `Transcription of ${LEG_NAME[leg]} dropped (${why}). Reconnecting...`
+          : `Could not reach Deepgram for ${LEG_NAME[leg]} (${why}). Trying again...`, true);
+      },
       onPartial: (segs) => setPartial(leg, segs), onFinal: (segs) => addFinal(leg, segs),
-      onError: (m) => status(leg + ": " + m, true) }
+      onError: (m) => { dgOpen[leg] = false; updateDiag(); status(leg + ": " + m, true); } }
   );
+  dgLink[leg] = dg;
   const src = { stop() { try { tap.stop(); } catch {} try { dg.close(); } catch {} } };
   sources.push(src);
   return src;
@@ -839,6 +887,7 @@ async function start() {
   utterances.length = 0;
   partials.me = []; partials.them = [];
   for (const map of [speakerOrdinals, speakerNames, nameSources]) for (const k of Object.keys(map)) delete map[k];
+  voiceBase = 0;
   declined.clear();
   roster.page = []; roster.self = "";
   unwatchRoster();
@@ -851,6 +900,8 @@ async function start() {
   tabLeg = null;
   frames.me = 0; frames.them = 0;
   dgOpen.me = false; dgOpen.them = false;
+  dgDrops.me = 0; dgDrops.them = 0;
+  dgLink.me = null; dgLink.them = null;
   updateDiag();
 
   // your mic -> "Me" (best-effort; the far end is the tab, below)
