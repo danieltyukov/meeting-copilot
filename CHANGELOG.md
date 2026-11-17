@@ -6,6 +6,29 @@ extension carry their own version numbers, both noted per release.
 
 ## [Unreleased]
 
+## [0.5.3] - 2026-11-17
+
+Extension 0.5.5. The terminal app is unchanged apart from its version.
+
+### Fixed
+- The extension's transcript could stop mid-call while people were still
+  talking. A source's Deepgram stream had ended (a network drop, or Deepgram
+  closing a stream it had stopped receiving audio from) and the panel never
+  noticed: it kept counting frames under `dg ok` with the last partial line
+  frozen. The panel now opens a new stream on its own and resends the audio
+  since the last finished line, so the text picks up where it stopped with
+  nothing lost or doubled. A stream that stays open but stops answering is
+  replaced the same way.
+- The status line says when a source dropped, why, and when it is back. The
+  footer shows `dg ok` only while a source's stream is open, along with how
+  many times it dropped and how far behind a slow upload is.
+- After a reconnect on a call with several voices, speakers come back with
+  new numbers instead of names that may now belong to someone else. A 1:1
+  keeps its name. Reconnect the call follows the same rule.
+- Meet links opened through the account chooser
+  (`meet.google.com/meet/<code>`) count as call pages, so Start and
+  Alt+Shift+S pick that tab.
+
 ## [0.5.2] - 2026-10-19
 
 Extension 0.5.4. The terminal app is unchanged apart from its version.
